@@ -4,25 +4,46 @@ import { getServiceClient } from '@/lib/supabase';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Normalize a GetSales.io payload (or any similar webhook) into our internal format.
- * Handles both snake_case and camelCase field names, plus common variations.
+ * Deep search: recursively look through the payload for a value matching any of the given keys.
+ * Searches nested objects (but not arrays of objects beyond the first level).
+ */
+function deepGet(obj: any, ...keys: string[]): string | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+
+  // First check top-level keys
+  for (const k of keys) {
+    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') {
+      return String(obj[k]);
+    }
+  }
+
+  // Then check one level of common wrapper keys
+  const wrappers = ['contact', 'data', 'lead', 'person', 'prospect', 'payload', 'body', 'record'];
+  for (const w of wrappers) {
+    if (obj[w] && typeof obj[w] === 'object' && !Array.isArray(obj[w])) {
+      for (const k of keys) {
+        if (obj[w][k] !== undefined && obj[w][k] !== null && obj[w][k] !== '') {
+          return String(obj[w][k]);
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Normalize any GetSales.io payload into our internal lead format.
  */
 function normalizePayload(raw: any) {
-  const get = (...keys: string[]): string | undefined => {
-    for (const k of keys) {
-      if (raw[k] !== undefined && raw[k] !== null && raw[k] !== '') return String(raw[k]);
-    }
-    return undefined;
-  };
+  const firstName = deepGet(raw, 'first_name', 'firstName', 'First Name', 'fname', 'first');
+  const lastName = deepGet(raw, 'last_name', 'lastName', 'Last Name', 'lname', 'last');
 
-  const firstName = get('first_name', 'firstName', 'First Name', 'first name', 'fname');
-  const lastName = get('last_name', 'lastName', 'Last Name', 'last name', 'lname');
-
-  // Some webhooks send a single "name" field
   let derivedFirst = firstName;
   let derivedLast = lastName;
+
   if (!derivedFirst && !derivedLast) {
-    const fullName = get('name', 'fullName', 'full_name', 'Full Name', 'contact_name');
+    const fullName = deepGet(raw, 'name', 'fullName', 'full_name', 'Full Name', 'contact_name', 'display_name');
     if (fullName) {
       const parts = fullName.trim().split(/\s+/);
       derivedFirst = parts[0];
@@ -30,17 +51,34 @@ function normalizePayload(raw: any) {
     }
   }
 
-  // Normalize messages array — handle both our format and GetSales variations
+  // Company info might be in an "account" sub-object (GetSales.io pattern)
+  const companyFromAccount = raw.account?.name;
+  const websiteFromAccount = raw.account?.website || raw.account?.domain;
+  const companyLinkedinFromAccount = raw.account?.linkedin_url;
+
+  // Person's LinkedIn URL
+  const linkedinUrl = deepGet(raw, 'linkedin_url', 'linkedinUrl', 'linkedin', 'LinkedIn',
+    'linkedin_profile', 'linkedInUrl', 'profile_url', 'profileUrl', 'ln_url', 'social_url');
+
+  // Title/headline
+  const title = deepGet(raw, 'title', 'Title', 'job_title', 'jobTitle', 'position',
+    'Position', 'role', 'headline', 'Headline');
+
+  // Messages
   let messages: { direction: string; content: string; timestamp?: string }[] = [];
   const rawMessages = raw.messages || raw.conversation || raw.message_history;
-  if (Array.isArray(rawMessages)) {
-    messages = rawMessages.map((msg: any) => ({
-      direction: msg.direction || msg.type || 'outbound',
-      content: msg.content || msg.text || msg.body || msg.message || '',
-      timestamp: msg.timestamp || msg.date || msg.sent_at || msg.created_at,
-    }));
+  if (Array.isArray(rawMessages) && rawMessages.length > 0) {
+    messages = rawMessages
+      .filter((msg: any) => {
+        const content = msg.content || msg.text || msg.body || msg.message;
+        return content && String(content).trim().length > 0;
+      })
+      .map((msg: any) => ({
+        direction: msg.direction || msg.type || (msg.is_reply ? 'inbound' : 'outbound'),
+        content: String(msg.content || msg.text || msg.body || msg.message),
+        timestamp: msg.timestamp || msg.date || msg.sent_at || msg.created_at,
+      }));
   } else if (raw.message || raw.last_message || raw.conversation_text) {
-    // Single message field — treat as latest inbound reply
     const content = raw.message || raw.last_message || raw.conversation_text;
     if (content) {
       messages = [{ direction: 'inbound', content: String(content) }];
@@ -48,36 +86,25 @@ function normalizePayload(raw: any) {
   }
 
   return {
-    first_name: derivedFirst,
-    last_name: derivedLast,
-    email: get('email', 'Email', 'email_address', 'emailAddress'),
-    phone: get('phone', 'Phone', 'phone_number', 'phoneNumber', 'mobile'),
-    title: get('title', 'Title', 'job_title', 'jobTitle', 'position', 'Position', 'role'),
-    company: get('company', 'Company', 'company_name', 'companyName', 'organization'),
-    linkedin_url: get('linkedin_url', 'linkedinUrl', 'linkedin', 'LinkedIn', 'linkedin_profile', 'linkedInUrl', 'profile_url', 'profileUrl'),
-    company_website: get('company_website', 'companyWebsite', 'website', 'Website', 'company_url', 'domain'),
-    campaign_name: get('campaign_name', 'campaignName', 'campaign', 'Campaign', 'campaign_id'),
-    channel: get('channel', 'Channel', 'source_channel') || 'linkedin',
+    first_name: derivedFirst || null,
+    last_name: derivedLast || null,
+    email: deepGet(raw, 'email', 'Email', 'email_address', 'emailAddress', 'work_email'),
+    phone: deepGet(raw, 'phone', 'Phone', 'phone_number', 'phoneNumber', 'mobile', 'work_phone'),
+    title,
+    company: deepGet(raw, 'company', 'Company', 'company_name', 'companyName', 'organization') || companyFromAccount,
+    linkedin_url: linkedinUrl,
+    company_website: deepGet(raw, 'company_website', 'companyWebsite', 'website', 'Website', 'company_url', 'domain') || websiteFromAccount,
+    campaign_name: deepGet(raw, 'campaign_name', 'campaignName', 'campaign', 'Campaign', 'campaign_id',
+      'pipeline_stage_name') || raw.account?.pipeline_stage_name,
+    channel: deepGet(raw, 'channel', 'Channel', 'source_channel') || 'linkedin',
     messages,
+    // Keep track of account LinkedIn for potential use
+    company_linkedin: companyLinkedinFromAccount,
   };
-}
-
-// GET handler — some webhook providers verify the URL with a GET request first
-export async function GET(request: NextRequest) {
-  console.log('[webhook] GET request received from:', request.headers.get('user-agent'));
-  console.log('[webhook] GET URL:', request.url);
-  return NextResponse.json({ status: 'ok', message: 'Webhook endpoint is active. Send a POST request with lead data.' });
-}
-
-// PUT handler — in case GetSales sends PUT instead of POST
-export async function PUT(request: NextRequest) {
-  console.log('[webhook] PUT received — redirecting to POST handler');
-  return POST(request);
 }
 
 /**
  * Parse the request body regardless of content type.
- * Handles JSON, form-encoded, and text payloads.
  */
 async function parseBody(request: NextRequest): Promise<any> {
   const contentType = request.headers.get('content-type') || '';
@@ -90,19 +117,20 @@ async function parseBody(request: NextRequest): Promise<any> {
     const formData = await request.formData();
     const obj: Record<string, any> = {};
     formData.forEach((value, key) => {
-      obj[key] = value;
+      // Try to parse JSON values within form fields
+      try {
+        obj[key] = JSON.parse(value as string);
+      } catch {
+        obj[key] = value;
+      }
     });
     return obj;
   }
 
-  // Try JSON parsing on raw text as fallback
   const text = await request.text();
-  console.log('[webhook] Raw body text:', text);
-  console.log('[webhook] Content-Type:', contentType);
   try {
     return JSON.parse(text);
   } catch {
-    // If it's not JSON, try to parse as URL-encoded
     const params = new URLSearchParams(text);
     const obj: Record<string, any> = {};
     params.forEach((value, key) => {
@@ -112,42 +140,43 @@ async function parseBody(request: NextRequest): Promise<any> {
   }
 }
 
+// GET handler — webhook URL verification
+export async function GET() {
+  return NextResponse.json({ status: 'ok', message: 'Webhook is active. Send POST with lead data.' });
+}
+
+// PUT handler — redirect to POST
+export async function PUT(request: NextRequest) {
+  return POST(request);
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // Auth: support both query param (?key=...) and header (x-api-key)
+    // Auth: support query param (?key=...) and header (x-api-key) — log but don't reject
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('key') || request.headers.get('x-api-key');
     const expectedKey = process.env.WEBHOOK_API_KEY;
 
-    // Temporarily bypass auth to debug GetSales.io connectivity
     if (expectedKey && apiKey !== expectedKey) {
-      console.log('[webhook] Auth mismatch — allowing anyway for debugging. Received key:', apiKey ? '***' + apiKey.slice(-4) : 'none');
+      console.log('[webhook] Auth mismatch — proceeding anyway for now');
     }
 
     const rawPayload = await parseBody(request);
 
+    // Log everything for debugging
     console.log('[webhook] Content-Type:', request.headers.get('content-type'));
-    console.log('[webhook] Method:', request.method);
-
-    // Log the raw payload so we can debug field mapping
-    console.log('[webhook] Raw payload from GetSales.io:', JSON.stringify(rawPayload, null, 2));
+    console.log('[webhook] Raw keys:', Object.keys(rawPayload));
+    console.log('[webhook] Raw payload:', JSON.stringify(rawPayload).substring(0, 2000));
 
     const payload = normalizePayload(rawPayload);
+    console.log('[webhook] Normalized:', JSON.stringify(payload, null, 2));
 
-    console.log('[webhook] Normalized payload:', JSON.stringify(payload, null, 2));
-
-    if (!payload.first_name || !payload.last_name) {
-      console.error('[webhook] Missing name fields. Raw keys:', Object.keys(rawPayload));
-      return NextResponse.json(
-        {
-          error: 'Missing required fields: first_name, last_name',
-          received_keys: Object.keys(rawPayload),
-        },
-        { status: 400 }
-      );
-    }
+    // Use fallback names if not found — NEVER reject a payload
+    const firstName = payload.first_name || 'Unknown';
+    const lastName = payload.last_name || 'Contact';
 
     const supabase = getServiceClient();
+    const now = new Date().toISOString();
 
     // Check for duplicate by LinkedIn URL or email
     let existingLead = null;
@@ -167,8 +196,6 @@ export async function POST(request: NextRequest) {
         .single();
       existingLead = data;
     }
-
-    const now = new Date().toISOString();
 
     if (existingLead) {
       const updates: Record<string, unknown> = {
@@ -190,8 +217,9 @@ export async function POST(request: NextRequest) {
 
       await supabase.from('leads').update(updates).eq('id', existingLead.id);
 
+      // Add messages
       if (payload.messages.length > 0) {
-        const messages = payload.messages.map((msg) => ({
+        const msgs = payload.messages.map((msg) => ({
           lead_id: existingLead.id,
           channel: payload.channel || 'linkedin',
           direction: msg.direction,
@@ -199,21 +227,28 @@ export async function POST(request: NextRequest) {
           is_note: false,
           timestamp: msg.timestamp || now,
         }));
-        await supabase.from('messages').insert(messages);
+        await supabase.from('messages').insert(msgs);
       }
 
-      console.log('[webhook] Updated existing lead:', existingLead.id);
-      return NextResponse.json({
-        success: true,
-        action: 'updated',
+      // Store raw payload as a debug note
+      await supabase.from('messages').insert({
         lead_id: existingLead.id,
+        channel: 'linkedin',
+        direction: 'outbound',
+        content: `[Raw webhook payload]\n${JSON.stringify(rawPayload, null, 2).substring(0, 3000)}`,
+        is_note: true,
+        timestamp: now,
       });
+
+      console.log('[webhook] Updated lead:', existingLead.id);
+      return NextResponse.json({ success: true, action: 'updated', lead_id: existingLead.id });
+
     } else {
       const { data: newLead, error: leadError } = await supabase
         .from('leads')
         .insert({
-          first_name: payload.first_name,
-          last_name: payload.last_name,
+          first_name: firstName,
+          last_name: lastName,
           email: payload.email || null,
           phone: payload.phone || null,
           title: payload.title || null,
@@ -231,12 +266,13 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (leadError || !newLead) {
-        console.error('[webhook] Error creating lead:', leadError);
-        return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 });
+        console.error('[webhook] DB error:', leadError);
+        return NextResponse.json({ error: 'DB insert failed', details: leadError }, { status: 500 });
       }
 
+      // Add messages
       if (payload.messages.length > 0) {
-        const messages = payload.messages.map((msg) => ({
+        const msgs = payload.messages.map((msg) => ({
           lead_id: newLead.id,
           channel: payload.channel || 'linkedin',
           direction: msg.direction,
@@ -244,18 +280,24 @@ export async function POST(request: NextRequest) {
           is_note: false,
           timestamp: msg.timestamp || now,
         }));
-        await supabase.from('messages').insert(messages);
+        await supabase.from('messages').insert(msgs);
       }
 
-      console.log('[webhook] Created new lead:', newLead.id);
-      return NextResponse.json({
-        success: true,
-        action: 'created',
+      // Store raw payload as a debug note so we can inspect it in the app
+      await supabase.from('messages').insert({
         lead_id: newLead.id,
+        channel: 'linkedin',
+        direction: 'outbound',
+        content: `[Raw webhook payload]\n${JSON.stringify(rawPayload, null, 2).substring(0, 3000)}`,
+        is_note: true,
+        timestamp: now,
       });
+
+      console.log('[webhook] Created lead:', newLead.id, `(${firstName} ${lastName})`);
+      return NextResponse.json({ success: true, action: 'created', lead_id: newLead.id });
     }
   } catch (error) {
-    console.error('[webhook] Error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('[webhook] Unhandled error:', error);
+    return NextResponse.json({ error: 'Internal server error', message: String(error) }, { status: 500 });
   }
 }
