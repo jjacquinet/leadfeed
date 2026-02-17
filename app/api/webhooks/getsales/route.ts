@@ -62,6 +62,56 @@ function normalizePayload(raw: any) {
   };
 }
 
+// GET handler — some webhook providers verify the URL with a GET request first
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const apiKey = searchParams.get('key') || request.headers.get('x-api-key');
+  const expectedKey = process.env.WEBHOOK_API_KEY;
+
+  if (expectedKey && apiKey !== expectedKey) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return NextResponse.json({ status: 'ok', message: 'Webhook endpoint is active. Send a POST request with lead data.' });
+}
+
+/**
+ * Parse the request body regardless of content type.
+ * Handles JSON, form-encoded, and text payloads.
+ */
+async function parseBody(request: NextRequest): Promise<any> {
+  const contentType = request.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    return request.json();
+  }
+
+  if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+    const formData = await request.formData();
+    const obj: Record<string, any> = {};
+    formData.forEach((value, key) => {
+      obj[key] = value;
+    });
+    return obj;
+  }
+
+  // Try JSON parsing on raw text as fallback
+  const text = await request.text();
+  console.log('[webhook] Raw body text:', text);
+  console.log('[webhook] Content-Type:', contentType);
+  try {
+    return JSON.parse(text);
+  } catch {
+    // If it's not JSON, try to parse as URL-encoded
+    const params = new URLSearchParams(text);
+    const obj: Record<string, any> = {};
+    params.forEach((value, key) => {
+      obj[key] = value;
+    });
+    return obj;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Auth: support both query param (?key=...) and header (x-api-key)
@@ -70,10 +120,14 @@ export async function POST(request: NextRequest) {
     const expectedKey = process.env.WEBHOOK_API_KEY;
 
     if (!expectedKey || apiKey !== expectedKey) {
+      console.log('[webhook] Auth failed. Received key:', apiKey ? '***' + apiKey.slice(-4) : 'none');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const rawPayload = await request.json();
+    const rawPayload = await parseBody(request);
+
+    console.log('[webhook] Content-Type:', request.headers.get('content-type'));
+    console.log('[webhook] Method:', request.method);
 
     // Log the raw payload so we can debug field mapping
     console.log('[webhook] Raw payload from GetSales.io:', JSON.stringify(rawPayload, null, 2));
