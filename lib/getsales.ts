@@ -127,6 +127,27 @@ export async function fetchLinkedInMessages(leadUuid: string): Promise<GetSalesL
 }
 
 /**
+ * Fetch a single email by UUID from GetSales.io API (to get the full body)
+ */
+export async function fetchEmailDetail(emailUuid: string): Promise<GetSalesEmail | null> {
+  try {
+    const url = new URL(`/emails/api/emails/${emailUuid}`, GETSALES_BASE_URL);
+    const response = await fetch(url.toString(), { headers: getHeaders() });
+
+    if (!response.ok) {
+      console.error('[getsales] Email detail fetch failed:', response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    return (data.data || data) as GetSalesEmail;
+  } catch (error) {
+    console.error('[getsales] Error fetching email detail:', error);
+    return null;
+  }
+}
+
+/**
  * Fetch email messages for a contact from GetSales.io API
  */
 export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
@@ -144,7 +165,31 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
     }
 
     const data = await response.json();
-    return (data.data || []) as GetSalesEmail[];
+    const emails = (data.data || []) as GetSalesEmail[];
+
+    // Log the first email to help debug body content
+    if (emails.length > 0) {
+      const sample = emails[0];
+      console.log(`[getsales] Sample email fields: subject="${sample.subject}", body length=${sample.body?.length ?? 'null'}, keys=${Object.keys(sample).join(',')}`);
+    }
+
+    // If list endpoint returns empty bodies, fetch individual emails for full content
+    const needsDetail = emails.length > 0 && !emails[0].body;
+    if (needsDetail) {
+      console.log(`[getsales] Email list missing bodies, fetching ${emails.length} individual emails...`);
+      const detailed = await Promise.all(
+        emails.map(async (email) => {
+          const detail = await fetchEmailDetail(email.uuid);
+          if (detail && detail.body) {
+            return { ...email, body: detail.body };
+          }
+          return email;
+        })
+      );
+      return detailed;
+    }
+
+    return emails;
   } catch (error) {
     console.error('[getsales] Error fetching emails:', error);
     return [];

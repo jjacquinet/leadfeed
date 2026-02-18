@@ -111,10 +111,30 @@ export async function POST(request: NextRequest) {
       const externalId = `gs_em_${email.uuid}`;
       if (existingExternalIds.has(externalId)) continue;
 
+      // Strip HTML tags from email body if present
+      let body = email.body || '';
+      if (body.includes('<') && body.includes('>')) {
+        body = body
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/p>/gi, '\n\n')
+          .replace(/<\/div>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
+
       const content = email.subject
-        ? `**${email.subject}**\n\n${email.body || ''}`
-        : email.body || '';
+        ? `**${email.subject}**\n\n${body}`
+        : body;
       if (!content.trim()) continue;
+
+      console.log(`[sync] Email "${email.subject}" body length: ${body.length}, preview: "${body.substring(0, 100)}"`);
 
       newMessages.push({
         lead_id: leadId,

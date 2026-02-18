@@ -4,6 +4,17 @@ import { Message } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
 import { formatDateTime } from '@/lib/utils';
 
+/** Render content with basic markdown bold (**text**) support */
+function renderContent(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
+}
+
 interface MessageBubbleProps {
   message: Message;
 }
@@ -37,13 +48,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           <span className="text-xs text-gray-400">{formatDateTime(message.timestamp)}</span>
         </div>
         <div
-          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
             isOutbound
               ? 'bg-indigo-600 text-white rounded-br-md'
               : 'bg-white text-gray-800 border border-gray-200 rounded-bl-md'
           }`}
         >
-          {message.content}
+          {renderContent(message.content)}
         </div>
       </div>
     </div>
