@@ -32,6 +32,75 @@ export interface GetSalesEmail {
 }
 
 /**
+ * Look up a contact in GetSales.io by LinkedIn URL or email.
+ * Returns the GetSales UUID if found.
+ */
+export async function lookupContact(linkedinUrl?: string | null, email?: string | null): Promise<string | null> {
+  if (!process.env.GETSALES_API_KEY) return null;
+
+  // Try lookup by LinkedIn URL first
+  if (linkedinUrl) {
+    try {
+      const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/lookup-one`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ linkedin_url: linkedinUrl }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data?.uuid) return data.uuid;
+      }
+    } catch (error) {
+      console.error('[getsales] LinkedIn lookup failed:', error);
+    }
+  }
+
+  // Try lookup by email
+  if (email) {
+    try {
+      const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/lookup-one`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ email }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data?.uuid) return data.uuid;
+      }
+    } catch (error) {
+      console.error('[getsales] Email lookup failed:', error);
+    }
+  }
+
+  // Try search as fallback
+  if (linkedinUrl) {
+    try {
+      // Extract the LinkedIn username/slug from the URL
+      const match = linkedinUrl.match(/linkedin\.com\/in\/([^/?]+)/);
+      const linkedin = match ? match[1] : null;
+      if (linkedin) {
+        const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/search`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({ filter: { linkedin } }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const results = data?.data || data;
+          if (Array.isArray(results) && results.length > 0 && results[0].uuid) {
+            return results[0].uuid;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[getsales] Search lookup failed:', error);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Fetch LinkedIn messages for a contact from GetSales.io API
  */
 export async function fetchLinkedInMessages(leadUuid: string): Promise<GetSalesLinkedInMessage[]> {

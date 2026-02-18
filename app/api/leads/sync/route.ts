@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { fetchLinkedInMessages, fetchEmails } from '@/lib/getsales';
+import { fetchLinkedInMessages, fetchEmails, lookupContact } from '@/lib/getsales';
 
 /**
  * Sync conversations from GetSales.io for a specific lead.
  * POST /api/leads/sync?lead_id=<uuid>
  *
- * Fetches LinkedIn messages and emails from GetSales.io API,
- * deduplicates against existing messages using external_id,
- * and inserts any new ones.
+ * If no GetSales UUID is stored, attempts to look it up via LinkedIn URL or email.
+ * Then fetches LinkedIn messages and emails, deduplicates, and inserts new ones.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -19,12 +18,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing lead_id' }, { status: 400 });
     }
 
+    // Check if GetSales API key is configured
+    if (!process.env.GETSALES_API_KEY) {
+      return NextResponse.json({
+        synced: 0,
+        message: 'GETSALES_API_KEY not configured',
+      });
+    }
+
     const supabase = getSupabase();
 
-    // Get the lead to find its GetSales UUID
+    // Get the lead
     const { data: lead, error: leadError } = await supabase
       .from('leads')
-      .select('id, getsales_uuid, first_name, last_name')
+      .select('id, getsales_uuid, first_name, last_name, linkedin_url, email')
       .eq('id', leadId)
       .single();
 
@@ -32,19 +39,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    if (!lead.getsales_uuid) {
-      return NextResponse.json({
-        synced: 0,
-        message: 'No GetSales.io UUID for this lead — conversations will sync once a webhook with a UUID is received',
-      });
-    }
+    // If no GetSales UUID, try to look it up via LinkedIn URL or email
+    let getsalesUuid = lead.getsales_uuid;
+    if (!getsalesUuid) {
+      console.log(`[sync] No UUID for ${lead.first_name} ${lead.last_name}, looking up...`);
+      getsalesUuid = await lookupContact(lead.linkedin_url, lead.email);
 
-    // Check if GetSales API key is configured
-    if (!process.env.GETSALES_API_KEY) {
-      return NextResponse.json({
-        synced: 0,
-        message: 'GETSALES_API_KEY not configured',
-      });
+      if (getsalesUuid) {
+        console.log(`[sync] Found UUID: ${getsalesUuid}`);
+        await supabase
+          .from('leads')
+          .update({ getsales_uuid: getsalesUuid })
+          .eq('id', leadId);
+      } else {
+        console.log(`[sync] Could not find UUID for ${lead.first_name} ${lead.last_name}`);
+        return NextResponse.json({
+          synced: 0,
+          message: 'Could not find this contact in GetSales.io by LinkedIn URL or email',
+        });
+      }
     }
 
     // Fetch existing external_ids to avoid duplicates
@@ -60,8 +73,8 @@ export async function POST(request: NextRequest) {
 
     // Fetch LinkedIn messages and emails in parallel
     const [linkedinMessages, emails] = await Promise.all([
-      fetchLinkedInMessages(lead.getsales_uuid),
-      fetchEmails(lead.getsales_uuid),
+      fetchLinkedInMessages(getsalesUuid),
+      fetchEmails(getsalesUuid),
     ]);
 
     console.log(`[sync] Lead ${lead.first_name} ${lead.last_name}: ${linkedinMessages.length} LinkedIn msgs, ${emails.length} emails`);
