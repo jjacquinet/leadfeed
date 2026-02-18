@@ -62,7 +62,32 @@ export default function HomePage() {
     fetchLeads();
   }, [fetchLeads]);
 
-  // Fetch messages for active lead
+  const [syncing, setSyncing] = useState(false);
+
+  // Sync conversations from GetSales.io then fetch messages
+  const syncAndFetchMessages = useCallback(async (leadId: string) => {
+    setSyncing(true);
+    try {
+      // Sync from GetSales.io API (pulls LinkedIn + email conversations)
+      await fetch(`/api/leads/sync?lead_id=${leadId}`, { method: 'POST' });
+    } catch (error) {
+      console.error('Error syncing from GetSales:', error);
+    }
+    // Always fetch messages regardless of sync result
+    try {
+      const response = await fetch(`/api/messages?lead_id=${leadId}`);
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setMessages((prev) => ({ ...prev, [leadId]: data }));
+      }
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
+  // Fetch messages only (without sync — for when we add notes locally)
   const fetchMessages = useCallback(async (leadId: string) => {
     try {
       const response = await fetch(`/api/messages?lead_id=${leadId}`);
@@ -77,9 +102,9 @@ export default function HomePage() {
 
   useEffect(() => {
     if (activeLeadId) {
-      fetchMessages(activeLeadId);
+      syncAndFetchMessages(activeLeadId);
     }
-  }, [activeLeadId, fetchMessages]);
+  }, [activeLeadId, syncAndFetchMessages]);
 
   // Compute stage counts
   const stageCounts = STAGE_NAV_ORDER.reduce((acc, stage) => {
@@ -133,6 +158,14 @@ export default function HomePage() {
   // Handle lead selection
   const handleLeadSelect = (leadId: string) => {
     setActiveLeadId(leadId);
+  };
+
+  // Handle manual refresh of conversations
+  const handleRefreshConversation = () => {
+    if (activeLeadId) {
+      syncAndFetchMessages(activeLeadId);
+      showToast('Syncing conversations...');
+    }
   };
 
   // Handle adding a note
@@ -306,6 +339,8 @@ export default function HomePage() {
         lead={activeLead}
         messages={activeMessages}
         onSendNote={handleSendNote}
+        syncing={syncing}
+        onRefresh={handleRefreshConversation}
       />
       <DetailPanel
         lead={activeLead}

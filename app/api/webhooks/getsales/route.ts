@@ -85,6 +85,9 @@ function normalizePayload(raw: any) {
     }
   }
 
+  // GetSales.io contact UUID — needed to pull conversations via their API
+  const getsalesUuid = deepGet(raw, 'uuid', 'lead_uuid', 'contact_uuid', 'id');
+
   return {
     first_name: derivedFirst || null,
     last_name: derivedLast || null,
@@ -98,7 +101,7 @@ function normalizePayload(raw: any) {
       'pipeline_stage_name') || raw.account?.pipeline_stage_name,
     channel: deepGet(raw, 'channel', 'Channel', 'source_channel') || 'linkedin',
     messages,
-    // Keep track of account LinkedIn for potential use
+    getsales_uuid: getsalesUuid || null,
     company_linkedin: companyLinkedinFromAccount,
   };
 }
@@ -197,11 +200,24 @@ export async function POST(request: NextRequest) {
       existingLead = data;
     }
 
+    // Also check for duplicate by GetSales UUID
+    if (!existingLead && payload.getsales_uuid) {
+      const { data } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('getsales_uuid', payload.getsales_uuid)
+        .single();
+      existingLead = data;
+    }
+
     if (existingLead) {
       const updates: Record<string, unknown> = {
         updated_at: now,
         last_activity: now,
       };
+      if (payload.getsales_uuid && !existingLead.getsales_uuid) {
+        updates.getsales_uuid = payload.getsales_uuid;
+      }
       if (payload.email && !existingLead.email) updates.email = payload.email;
       if (payload.phone && !existingLead.phone) updates.phone = payload.phone;
       if (payload.title) updates.title = payload.title;
@@ -255,6 +271,7 @@ export async function POST(request: NextRequest) {
           company: payload.company || null,
           linkedin_url: payload.linkedin_url || null,
           company_website: payload.company_website || null,
+          getsales_uuid: payload.getsales_uuid || null,
           stage: 'lead_feed',
           source: 'getsales_webhook',
           campaign_name: payload.campaign_name || null,

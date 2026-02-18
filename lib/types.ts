@@ -23,6 +23,7 @@ export interface Lead {
   snoozed_until: string | null;
   source: string | null;
   campaign_name: string | null;
+  getsales_uuid: string | null;
   created_at: string;
   updated_at: string;
   last_activity: string;
@@ -37,6 +38,7 @@ export interface Message {
   is_note: boolean;
   timestamp: string;
   created_at: string;
+  external_id: string | null;
 }
 
 export interface WebhookPayload {
