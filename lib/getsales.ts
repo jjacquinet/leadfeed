@@ -29,6 +29,14 @@ export interface GetSalesEmail {
   sent_at: string | null;
   status: string;
   lead_uuid: string;
+  // Possible alternative body fields from API
+  text?: string;
+  content?: string;
+  html_body?: string;
+  body_html?: string;
+  body_text?: string;
+  message?: string;
+  [key: string]: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
@@ -167,10 +175,16 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
     const data = await response.json();
     const emails = (data.data || []) as GetSalesEmail[];
 
-    // Log the first email to help debug body content
+    // Log the FULL raw first email to see all available fields
     if (emails.length > 0) {
-      const sample = emails[0];
-      console.log(`[getsales] Sample email fields: subject="${sample.subject}", body length=${sample.body?.length ?? 'null'}, keys=${Object.keys(sample).join(',')}`);
+      console.log(`[getsales] RAW first email object: ${JSON.stringify(emails[0])}`);
+    }
+
+    // Try to resolve body from alternative field names
+    for (const email of emails) {
+      if (!email.body) {
+        email.body = email.text || email.content || email.html_body || email.body_html || email.body_text || email.message || '';
+      }
     }
 
     // If list endpoint returns empty bodies, fetch individual emails for full content
@@ -180,8 +194,12 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
       const detailed = await Promise.all(
         emails.map(async (email) => {
           const detail = await fetchEmailDetail(email.uuid);
-          if (detail && detail.body) {
-            return { ...email, body: detail.body };
+          if (detail) {
+            console.log(`[getsales] RAW email detail for ${email.uuid}: ${JSON.stringify(detail)}`);
+            const detailBody = detail.body || detail.text || detail.content || detail.html_body || detail.body_html || detail.body_text || detail.message || '';
+            if (detailBody) {
+              return { ...email, body: detailBody };
+            }
           }
           return email;
         })
