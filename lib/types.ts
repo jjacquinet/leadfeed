@@ -1,9 +1,6 @@
 export type LeadStage =
   | 'lead_feed'
-  | 'snoozed'
-  | 'meeting_booked'
-  | 'closed_won'
-  | 'closed_lost';
+  | 'snoozed';
 
 export type MessageChannel = 'linkedin' | 'email' | 'phone' | 'text';
 
@@ -62,15 +59,9 @@ export interface WebhookPayload {
 export const STAGE_LABELS: Record<LeadStage, string> = {
   lead_feed: 'Lead Feed',
   snoozed: 'Snoozed',
-  meeting_booked: 'Meeting Booked',
-  closed_won: 'Closed — Won',
-  closed_lost: 'Closed — Lost',
 };
 
 export const STAGE_NAV_ORDER: LeadStage[] = [
   'lead_feed',
   'snoozed',
-  'meeting_booked',
-  'closed_won',
-  'closed_lost',
 ];

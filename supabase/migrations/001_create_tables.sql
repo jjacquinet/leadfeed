@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS leads (
   linkedin_url TEXT,
   company_website TEXT,
   stage TEXT NOT NULL DEFAULT 'lead_feed'
-    CHECK (stage IN ('lead_feed', 'snoozed', 'meeting_booked', 'closed_won', 'closed_lost')),
+    CHECK (stage IN ('lead_feed', 'snoozed')),
   snoozed_until TIMESTAMPTZ,
   source TEXT,
   campaign_name TEXT,
