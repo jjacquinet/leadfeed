@@ -59,7 +59,7 @@ VALUES (
   'jobrien@fintech-global.com', '+1-312-555-0104',
   'Chief Revenue Officer', 'FinTech Global',
   'https://linkedin.com/in/jamesobrien-cro', 'https://fintech-global.com',
-  'meeting_booked', 'getsales_webhook', 'FinTech Leaders Q1',
+  'lead_feed', 'getsales_webhook', 'FinTech Leaders Q1',
   NOW() - INTERVAL '10 days', NOW() - INTERVAL '6 hours', NOW() - INTERVAL '6 hours'
 );
 
@@ -117,7 +117,7 @@ VALUES (
   'emily.watson@healthbridge.co', '+1-617-555-0107',
   'VP of Business Development', 'HealthBridge',
   'https://linkedin.com/in/emilywatson-bd', 'https://healthbridge.co',
-  'closed_won', 'getsales_webhook', 'HealthTech Outreach',
+  'lead_feed', 'getsales_webhook', 'HealthTech Outreach',
   NOW() - INTERVAL '30 days', NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days'
 );
 
@@ -137,7 +137,7 @@ VALUES (
   'ryan@logisticsplus.com', '+1-713-555-0108',
   'Director of Partnerships', 'Logistics Plus',
   'https://linkedin.com/in/ryanpatel-partnerships', 'https://logisticsplus.com',
-  'closed_lost', 'getsales_webhook', 'Logistics & Supply Chain',
+  'lead_feed', 'getsales_webhook', 'Logistics & Supply Chain',
   NOW() - INTERVAL '21 days', NOW() - INTERVAL '5 days', NOW() - INTERVAL '5 days'
 );
 

@@ -19,9 +19,6 @@ export async function GET() {
     const counts: Record<LeadStage, number> = {
       lead_feed: 0,
       snoozed: 0,
-      meeting_booked: 0,
-      closed_won: 0,
-      closed_lost: 0,
     };
 
     for (const lead of leads || []) {

@@ -9,9 +9,6 @@ interface LeadStageSelectorProps {
 
 const stageOptions: { value: LeadStage; label: string; color: string }[] = [
   { value: 'lead_feed', label: 'Lead Feed', color: 'bg-blue-100 text-blue-700' },
-  { value: 'meeting_booked', label: 'Meeting Booked', color: 'bg-purple-100 text-purple-700' },
-  { value: 'closed_won', label: 'Closed — Won', color: 'bg-green-100 text-green-700' },
-  { value: 'closed_lost', label: 'Closed — Lost', color: 'bg-red-100 text-red-700' },
 ];
 
 export default function LeadStageSelector({ currentStage, onChange }: LeadStageSelectorProps) {
