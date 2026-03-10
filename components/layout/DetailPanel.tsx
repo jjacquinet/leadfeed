@@ -51,6 +51,17 @@ function toTelHref(phone: string): string | null {
   return `tel:${hasLeadingPlus ? '+' : ''}${digitsOnly}`;
 }
 
+function toSmsHref(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+
+  const hasLeadingPlus = trimmed.startsWith('+');
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  if (!digitsOnly) return null;
+
+  return `sms:${hasLeadingPlus ? '+' : ''}${digitsOnly}`;
+}
+
 export default function DetailPanel({
   lead,
   onStageChange,
@@ -220,6 +231,18 @@ export default function DetailPanel({
                                 className="text-xs font-medium text-emerald-600 hover:text-emerald-800"
                               >
                                 Call
+                              </a>
+                            );
+                          })()}
+                          {(() => {
+                            const smsHref = toSmsHref(phone);
+                            if (!smsHref) return null;
+                            return (
+                              <a
+                                href={smsHref}
+                                className="text-xs font-medium text-blue-600 hover:text-blue-800"
+                              >
+                                Text
                               </a>
                             );
                           })()}
