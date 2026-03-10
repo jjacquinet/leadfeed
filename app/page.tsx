@@ -403,7 +403,9 @@ export default function HomePage() {
         setAllLeads((prev) =>
           prev.map((lead) => (lead.id === leadId ? payload.lead : lead))
         );
-        if (payload.added > 0) {
+        if (payload.queued && payload.added === 0) {
+          showToast('Enrichment requested. Apollo will update phones shortly.');
+        } else if (payload.added > 0) {
           showToast(`Added ${payload.added} phone number${payload.added === 1 ? '' : 's'}`);
         } else {
           showToast('No new phone numbers found');

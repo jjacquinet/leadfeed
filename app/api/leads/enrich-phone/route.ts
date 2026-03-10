@@ -35,9 +35,15 @@ export async function POST(request: NextRequest) {
       lead.phone,
     ]);
 
+    const requestOrigin = new URL(request.url).origin;
+    const webhookBaseUrl =
+      process.env.APOLLO_WEBHOOK_URL || `${requestOrigin}/api/webhooks/apollo`;
+    const webhookUrl = `${webhookBaseUrl}${webhookBaseUrl.includes('?') ? '&' : '?'}lead_id=${encodeURIComponent(leadId)}`;
+
     const enrichment = await enrichPhonesFromApollo({
       linkedinUrl: lead.linkedin_url,
       email: lead.email,
+      webhookUrl,
     });
 
     const mergedPhones = mergePhoneNumbers(existingPhones, enrichment.phones);
@@ -66,6 +72,7 @@ export async function POST(request: NextRequest) {
       added,
       total: mergedPhones.length,
       found: enrichment.phones.length,
+      queued: enrichment.deferred,
     });
   } catch (error) {
     console.error('Error enriching phone number:', error);

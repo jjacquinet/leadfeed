@@ -36,6 +36,7 @@ Required variables:
 | `WEBHOOK_API_KEY` | Secret key for authenticating webhook requests |
 | `APOLLO_API_KEY` | Apollo API key used for phone enrichment |
 | `APOLLO_BASE_URL` | Apollo API base URL (optional, defaults to `https://api.apollo.io/api/v1`) |
+| `APOLLO_WEBHOOK_URL` | Public webhook URL Apollo can call back with revealed phone numbers (optional; defaults to `<app-url>/api/webhooks/apollo`) |
 
 ### 3. Install & Run
 

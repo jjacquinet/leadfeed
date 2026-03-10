@@ -87,6 +87,27 @@ export default function DetailPanel({
     }
   };
 
+  const handleDeletePhone = async (index: number) => {
+    if (!lead || savingPhone) return;
+    const phoneLabel = phoneNumbers[index];
+    const confirmed = window.confirm(
+      `Delete Phone ${index + 1}${phoneLabel ? ` (${phoneLabel})` : ''}?`
+    );
+    if (!confirmed) return;
+
+    try {
+      setSavingPhone(true);
+      const nextPhoneNumbers = phoneNumbers.filter((_, phoneIndex) => phoneIndex !== index);
+      await onPhoneNumbersUpdate(lead.id, nextPhoneNumbers);
+      if (editingPhoneIndex === index) {
+        setEditingPhoneIndex(null);
+        setPhoneInput('');
+      }
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   const handleEnrichPhones = async () => {
     if (!lead || enrichingPhones) return;
     try {
@@ -178,16 +199,26 @@ export default function DetailPanel({
                     ) : (
                       <div className="flex items-center justify-between gap-2">
                         <span>{phone}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingPhoneIndex(index);
-                            setPhoneInput(phone);
-                          }}
-                          className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
-                        >
-                          Edit
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPhoneIndex(index);
+                              setPhoneInput(phone);
+                            }}
+                            className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePhone(index)}
+                            disabled={savingPhone}
+                            className="text-xs font-medium text-red-600 hover:text-red-800 disabled:cursor-not-allowed disabled:text-red-300"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
