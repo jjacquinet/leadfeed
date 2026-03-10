@@ -20,6 +20,13 @@ interface ConversationPanelProps {
   }) => Promise<void>;
   syncing?: boolean;
   onRefresh?: () => void;
+  draft?: {
+    channel: 'linkedin' | 'email';
+    subject?: string;
+    content: string;
+  } | null;
+  draftVersion?: number;
+  onDraftApplied?: () => void;
 }
 
 export default function ConversationPanel({
@@ -30,6 +37,9 @@ export default function ConversationPanel({
   onSendReply,
   syncing,
   onRefresh,
+  draft,
+  draftVersion,
+  onDraftApplied,
 }: ConversationPanelProps) {
   if (!lead) {
     return (
@@ -100,6 +110,9 @@ export default function ConversationPanel({
         senderProfiles={senderProfiles}
         onSendNote={onSendNote}
         onSendReply={onSendReply}
+        draft={draft}
+        draftVersion={draftVersion}
+        onDraftApplied={onDraftApplied}
       />
     </div>
   );

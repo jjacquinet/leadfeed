@@ -29,9 +29,24 @@ interface MessageComposerProps {
     fromEmail?: string;
   }) => Promise<void>;
   disabled?: boolean;
+  draft?: {
+    channel: 'linkedin' | 'email';
+    subject?: string;
+    content: string;
+  } | null;
+  draftVersion?: number;
+  onDraftApplied?: () => void;
 }
 
-export default function MessageComposer({ senderProfiles, onSendNote, onSendReply, disabled }: MessageComposerProps) {
+export default function MessageComposer({
+  senderProfiles,
+  onSendNote,
+  onSendReply,
+  disabled,
+  draft,
+  draftVersion,
+  onDraftApplied,
+}: MessageComposerProps) {
   const [content, setContent] = useState('');
   const [isNoteMode, setIsNoteMode] = useState(false);
   const [channel, setChannel] = useState<MessageChannel>('linkedin');
@@ -65,6 +80,16 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
       setSenderProfileUuid(filteredSenderProfiles[0].uuid);
     }
   }, [filteredSenderProfiles, senderProfileUuid]);
+
+  useEffect(() => {
+    if (!draft || !draftVersion) return;
+    setIsNoteMode(false);
+    setChannel(draft.channel);
+    setContent(draft.content || '');
+    setSubject(draft.subject || '');
+    setError(null);
+    onDraftApplied?.();
+  }, [draft, draftVersion, onDraftApplied]);
 
   const handleSubmit = async () => {
     if (!content.trim()) return;

@@ -37,6 +37,8 @@ Required variables:
 | `APOLLO_API_KEY` | Apollo API key used for phone enrichment |
 | `APOLLO_BASE_URL` | Apollo API base URL (optional, defaults to `https://api.apollo.io/api/v1`) |
 | `APOLLO_WEBHOOK_URL` | Public webhook URL Apollo can call back with revealed phone numbers (optional; defaults to `<app-url>/api/webhooks/apollo`) |
+| `ANTHROPIC_API_KEY` | Anthropic API key used by the Claude assistant panel |
+| `ANTHROPIC_MODEL` | Anthropic model id (optional, defaults to `claude-3-5-sonnet-latest`) |
 
 ### 3. Install & Run
 
@@ -105,6 +107,7 @@ The endpoint:
 - **Stage transitions** — Move leads through the pipeline with auto-generated system notes
 - **Webhook ingestion** — Receive leads from GetSales.io via n8n
 - **One-click phone enrichment** — Pull phones from Apollo and store up to 5 numbers per lead
+- **Claude assistant panel** — Right-side AI chat that can prioritize leads and draft replies from conversation context
 - **Auto-unsnooze** — Expired snoozed leads automatically return to Lead Feed
 - **Seed data** — 10 realistic B2B leads with conversation threads included
 

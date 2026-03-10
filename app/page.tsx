@@ -5,6 +5,8 @@ import { Lead, LeadStage, Message, SenderProfile, STAGE_NAV_ORDER } from '@/lib/
 import Sidebar from '@/components/layout/Sidebar';
 import ConversationPanel from '@/components/layout/ConversationPanel';
 import DetailPanel from '@/components/layout/DetailPanel';
+import AiAssistantPanel from '@/components/layout/AiAssistantPanel';
+import ResizableRightPanel from '@/components/layout/ResizableRightPanel';
 import Toast from '@/components/ui/Toast';
 
 export default function HomePage() {
@@ -13,6 +15,12 @@ export default function HomePage() {
   const [activeStage, setActiveStage] = useState<LeadStage>('lead_feed');
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
   const [senderProfiles, setSenderProfiles] = useState<SenderProfile[]>([]);
+  const [composerDraft, setComposerDraft] = useState<{
+    channel: 'linkedin' | 'email';
+    subject?: string;
+    content: string;
+  } | null>(null);
+  const [composerDraftVersion, setComposerDraftVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({
     message: '',
@@ -417,6 +425,16 @@ export default function HomePage() {
     }
   };
 
+  const handleUseAiDraft = useCallback((draft: {
+    channel: 'linkedin' | 'email';
+    subject?: string;
+    content: string;
+  }) => {
+    setComposerDraft(draft);
+    setComposerDraftVersion((prev) => prev + 1);
+    showToast('Draft inserted into composer');
+  }, [showToast]);
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -453,6 +471,9 @@ export default function HomePage() {
         onSendReply={handleSendReply}
         syncing={syncing}
         onRefresh={handleRefreshConversation}
+        draft={composerDraft}
+        draftVersion={composerDraftVersion}
+        onDraftApplied={() => setComposerDraft(null)}
       />
       <DetailPanel
         lead={activeLead}
@@ -462,6 +483,16 @@ export default function HomePage() {
         onPhoneNumbersUpdate={handlePhoneNumbersUpdate}
         onPhoneEnrich={handlePhoneEnrich}
       />
+      <ResizableRightPanel>
+        <AiAssistantPanel
+          allLeads={allLeads}
+          visibleLeads={filteredLeads}
+          activeLead={activeLead}
+          activeMessages={activeMessages}
+          activeStage={activeStage}
+          onUseDraft={handleUseAiDraft}
+        />
+      </ResizableRightPanel>
       <Toast
         message={toast.message}
         isVisible={toast.visible}
