@@ -40,6 +40,17 @@ function DetailField({ label, value, isLink }: { label: string; value?: string |
   );
 }
 
+function toTelHref(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+
+  const hasLeadingPlus = trimmed.startsWith('+');
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  if (!digitsOnly) return null;
+
+  return `tel:${hasLeadingPlus ? '+' : ''}${digitsOnly}`;
+}
+
 export default function DetailPanel({
   lead,
   onStageChange,
@@ -200,6 +211,18 @@ export default function DetailPanel({
                       <div className="flex items-center justify-between gap-2">
                         <span>{phone}</span>
                         <div className="flex items-center gap-2">
+                          {(() => {
+                            const telHref = toTelHref(phone);
+                            if (!telHref) return null;
+                            return (
+                              <a
+                                href={telHref}
+                                className="text-xs font-medium text-emerald-600 hover:text-emerald-800"
+                              >
+                                Call
+                              </a>
+                            );
+                          })()}
                           <button
                             type="button"
                             onClick={() => {
