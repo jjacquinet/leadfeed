@@ -7,6 +7,7 @@ import ConversationPanel from '@/components/layout/ConversationPanel';
 import DetailPanel from '@/components/layout/DetailPanel';
 import AiAssistantPanel from '@/components/layout/AiAssistantPanel';
 import ResizableRightPanel from '@/components/layout/ResizableRightPanel';
+import AiPanelErrorBoundary from '@/components/layout/AiPanelErrorBoundary';
 import Toast from '@/components/ui/Toast';
 
 export default function HomePage() {
@@ -484,14 +485,16 @@ export default function HomePage() {
         onPhoneEnrich={handlePhoneEnrich}
       />
       <ResizableRightPanel>
-        <AiAssistantPanel
-          allLeads={allLeads}
-          visibleLeads={filteredLeads}
-          activeLead={activeLead}
-          activeMessages={activeMessages}
-          activeStage={activeStage}
-          onUseDraft={handleUseAiDraft}
-        />
+        <AiPanelErrorBoundary>
+          <AiAssistantPanel
+            allLeads={allLeads}
+            visibleLeads={filteredLeads}
+            activeLead={activeLead}
+            activeMessages={activeMessages}
+            activeStage={activeStage}
+            onUseDraft={handleUseAiDraft}
+          />
+        </AiPanelErrorBoundary>
       </ResizableRightPanel>
       <Toast
         message={toast.message}

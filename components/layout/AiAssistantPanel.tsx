@@ -28,6 +28,42 @@ type AssistantTurn = {
   } | null;
 };
 
+function sanitizeActions(actions: AssistantTurn['actions'] | unknown): AssistantTurn['actions'] {
+  if (!actions || typeof actions !== 'object') return null;
+  const candidate = actions as AssistantTurn['actions'];
+  const safe: NonNullable<AssistantTurn['actions']> = {};
+
+  if (candidate?.leadRanking && Array.isArray(candidate.leadRanking.leads)) {
+    const leads = candidate.leadRanking.leads
+      .filter((item) => item && typeof item.leadId === 'string' && typeof item.reason === 'string')
+      .slice(0, 10)
+      .map((item) => ({
+        leadId: item.leadId,
+        reason: item.reason,
+        score: typeof item.score === 'number' ? item.score : undefined,
+      }));
+    if (leads.length > 0) {
+      safe.leadRanking = { leads };
+    }
+  }
+
+  if (
+    candidate?.draftReply &&
+    (candidate.draftReply.channel === 'linkedin' || candidate.draftReply.channel === 'email') &&
+    typeof candidate.draftReply.content === 'string'
+  ) {
+    safe.draftReply = {
+      leadId: typeof candidate.draftReply.leadId === 'string' ? candidate.draftReply.leadId : undefined,
+      channel: candidate.draftReply.channel,
+      subject: typeof candidate.draftReply.subject === 'string' ? candidate.draftReply.subject : undefined,
+      content: candidate.draftReply.content,
+      rationale: typeof candidate.draftReply.rationale === 'string' ? candidate.draftReply.rationale : undefined,
+    };
+  }
+
+  return safe.leadRanking || safe.draftReply ? safe : null;
+}
+
 interface AiAssistantPanelProps {
   allLeads: Lead[];
   visibleLeads: Lead[];
@@ -100,7 +136,7 @@ export default function AiAssistantPanel({
         {
           role: 'assistant',
           content: payload.reply || 'No response returned.',
-          actions: payload.actions || null,
+          actions: sanitizeActions(payload.actions),
         },
       ]);
     } catch (sendError) {
@@ -144,51 +180,60 @@ export default function AiAssistantPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-gray-50">
-        {turns.map((turn, idx) => (
-          <div key={idx} className={turn.role === 'user' ? 'text-right' : ''}>
-            <div
-              className={`inline-block max-w-[95%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                turn.role === 'user'
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-white text-gray-800 border border-gray-200'
-              }`}
-            >
-              {turn.content}
-            </div>
+        {turns.map((turn, idx) => {
+          const candidateLeads = turn.actions?.leadRanking?.leads;
+          const rankingLeads = Array.isArray(candidateLeads) ? candidateLeads : [];
+          const draft = turn.actions?.draftReply && typeof turn.actions.draftReply.content === 'string'
+            ? turn.actions.draftReply
+            : null;
 
-            {turn.role === 'assistant' && turn.actions?.leadRanking && turn.actions.leadRanking.leads.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {turn.actions.leadRanking.leads.slice(0, 5).map((ranked) => (
-                  <div key={ranked.leadId} className="text-xs bg-white border border-gray-200 rounded-md p-2 text-left">
-                    <div className="font-medium text-gray-800">
-                      {leadNameById.get(ranked.leadId) || ranked.leadId}
-                      {typeof ranked.score === 'number' ? ` • Score ${ranked.score}` : ''}
+          return (
+            <div key={idx} className={turn.role === 'user' ? 'text-right' : ''}>
+              <div
+                className={`inline-block max-w-[95%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                  turn.role === 'user'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white text-gray-800 border border-gray-200'
+                }`}
+              >
+                {turn.content}
+              </div>
+
+              {turn.role === 'assistant' && rankingLeads.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {rankingLeads.slice(0, 5).map((ranked) => (
+                    <div key={ranked.leadId} className="text-xs bg-white border border-gray-200 rounded-md p-2 text-left">
+                      <div className="font-medium text-gray-800">
+                        {leadNameById.get(ranked.leadId) || ranked.leadId}
+                        {typeof ranked.score === 'number' ? ` • Score ${ranked.score}` : ''}
+                      </div>
+                      <div className="text-gray-600 mt-0.5">{ranked.reason}</div>
                     </div>
-                    <div className="text-gray-600 mt-0.5">{ranked.reason}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {turn.role === 'assistant' && turn.actions?.draftReply && (
-              <div className="mt-2 text-left bg-white border border-indigo-200 rounded-md p-2">
-                <div className="text-xs font-semibold text-indigo-700">Draft Ready</div>
-                <div className="text-xs text-gray-600 mt-1">
-                  {turn.actions.draftReply.subject
-                    ? `Subject: ${turn.actions.draftReply.subject}`
-                    : 'LinkedIn draft'}
+                  ))}
                 </div>
-                <div className="text-xs text-gray-700 mt-1">{turn.actions.draftReply.content.slice(0, 180)}{turn.actions.draftReply.content.length > 180 ? '...' : ''}</div>
-                <button
-                  onClick={() => onUseDraft(turn.actions!.draftReply!)}
-                  className="mt-2 text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-                >
-                  Use Draft In Composer
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+
+              {turn.role === 'assistant' && draft && (
+                <div className="mt-2 text-left bg-white border border-indigo-200 rounded-md p-2">
+                  <div className="text-xs font-semibold text-indigo-700">Draft Ready</div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {draft.subject ? `Subject: ${draft.subject}` : 'LinkedIn draft'}
+                  </div>
+                  <div className="text-xs text-gray-700 mt-1">
+                    {draft.content.slice(0, 180)}
+                    {draft.content.length > 180 ? '...' : ''}
+                  </div>
+                  <button
+                    onClick={() => onUseDraft(draft)}
+                    className="mt-2 text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                  >
+                    Use Draft In Composer
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
         {isSending && <div className="text-xs text-gray-500">Thinking...</div>}
       </div>
 

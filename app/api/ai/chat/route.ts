@@ -34,6 +34,42 @@ type AiActions = {
   };
 };
 
+function sanitizeActions(actions: AiActions | null): AiActions | null {
+  if (!actions || typeof actions !== 'object') return null;
+
+  const safe: AiActions = {};
+
+  if (actions.leadRanking && Array.isArray(actions.leadRanking.leads)) {
+    const leads = actions.leadRanking.leads
+      .filter((item) => item && typeof item.leadId === 'string' && typeof item.reason === 'string')
+      .slice(0, 10)
+      .map((item) => ({
+        leadId: item.leadId,
+        reason: item.reason,
+        score: typeof item.score === 'number' ? item.score : undefined,
+      }));
+    if (leads.length > 0) {
+      safe.leadRanking = { leads };
+    }
+  }
+
+  if (
+    actions.draftReply &&
+    typeof actions.draftReply.content === 'string' &&
+    (actions.draftReply.channel === 'linkedin' || actions.draftReply.channel === 'email')
+  ) {
+    safe.draftReply = {
+      leadId: typeof actions.draftReply.leadId === 'string' ? actions.draftReply.leadId : undefined,
+      channel: actions.draftReply.channel,
+      subject: typeof actions.draftReply.subject === 'string' ? actions.draftReply.subject : undefined,
+      content: actions.draftReply.content,
+      rationale: typeof actions.draftReply.rationale === 'string' ? actions.draftReply.rationale : undefined,
+    };
+  }
+
+  return safe.leadRanking || safe.draftReply ? safe : null;
+}
+
 const TOOLS: ClaudeToolDefinition[] = [
   {
     name: 'get_lead_summaries',
@@ -108,7 +144,7 @@ function parseActions(text: string): { cleanedText: string; actions: AiActions |
 
   try {
     const parsed = JSON.parse(rawJson) as AiActions;
-    return { cleanedText: cleaned, actions: parsed };
+    return { cleanedText: cleaned, actions: sanitizeActions(parsed) };
   } catch {
     return { cleanedText: cleaned || text.trim(), actions: null };
   }
