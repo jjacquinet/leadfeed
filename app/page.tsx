@@ -307,6 +307,27 @@ export default function HomePage() {
     }
   };
 
+  // Handle phone update
+  const handlePhoneUpdate = async (leadId: string, phone: string) => {
+    try {
+      const response = await fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: leadId, phone }),
+      });
+
+      const updatedLead = await response.json();
+      if (updatedLead.id) {
+        setAllLeads((prev) =>
+          prev.map((lead) => (lead.id === leadId ? updatedLead : lead))
+        );
+        showToast('Phone number updated');
+      }
+    } catch (error) {
+      console.error('Error updating phone number:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -347,6 +368,7 @@ export default function HomePage() {
         onStageChange={handleStageChange}
         onSnooze={handleSnooze}
         onUnsnooze={handleUnsnooze}
+        onPhoneUpdate={handlePhoneUpdate}
       />
       <Toast
         message={toast.message}

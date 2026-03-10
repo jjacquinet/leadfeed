@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Lead, LeadStage } from '@/lib/types';
 import Avatar from '@/components/ui/Avatar';
 import LeadStageSelector from '@/components/leads/LeadStageSelector';
@@ -11,6 +12,7 @@ interface DetailPanelProps {
   onStageChange: (leadId: string, stage: LeadStage) => void;
   onSnooze: (leadId: string, until: Date) => void;
   onUnsnooze: (leadId: string) => void;
+  onPhoneUpdate: (leadId: string, phone: string) => Promise<void>;
 }
 
 function DetailField({ label, value, isLink }: { label: string; value?: string | null; isLink?: boolean }) {
@@ -36,7 +38,31 @@ function DetailField({ label, value, isLink }: { label: string; value?: string |
   );
 }
 
-export default function DetailPanel({ lead, onStageChange, onSnooze, onUnsnooze }: DetailPanelProps) {
+export default function DetailPanel({ lead, onStageChange, onSnooze, onUnsnooze, onPhoneUpdate }: DetailPanelProps) {
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
+
+  useEffect(() => {
+    setIsEditingPhone(false);
+    setPhoneInput(lead?.phone ?? '');
+    setSavingPhone(false);
+  }, [lead?.id, lead?.phone]);
+
+  const handleSavePhone = async () => {
+    if (!lead) return;
+    const trimmedPhone = phoneInput.trim();
+    if (!trimmedPhone || savingPhone) return;
+
+    try {
+      setSavingPhone(true);
+      await onPhoneUpdate(lead.id, trimmedPhone);
+      setIsEditingPhone(false);
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   if (!lead) {
     return (
       <div className="w-[320px] bg-white border-l border-gray-200 shrink-0" />
@@ -68,7 +94,55 @@ export default function DetailPanel({ lead, onStageChange, onSnooze, onUnsnooze 
           <DetailField label="LinkedIn" value={lead.linkedin_url} isLink />
           <DetailField label="Website" value={lead.company_website} isLink />
           <DetailField label="Email" value={lead.email} />
-          <DetailField label="Phone" value={lead.phone} />
+          <div className="py-2">
+            <dt className="text-xs text-gray-400 font-medium">Phone</dt>
+            <dd className="text-sm text-gray-800 mt-0.5">
+              {isEditingPhone || !lead.phone ? (
+                <div className="space-y-2">
+                  <input
+                    type="tel"
+                    value={phoneInput}
+                    onChange={(event) => setPhoneInput(event.target.value)}
+                    placeholder="Add phone number"
+                    className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSavePhone}
+                      disabled={savingPhone || !phoneInput.trim()}
+                      className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-not-allowed disabled:bg-indigo-300"
+                    >
+                      {savingPhone ? 'Saving...' : 'Save'}
+                    </button>
+                    {lead.phone && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEditingPhone(false);
+                          setPhoneInput(lead.phone ?? '');
+                        }}
+                        className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span>{lead.phone}</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingPhone(true)}
+                    className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+            </dd>
+          </div>
         </dl>
       </div>
 
