@@ -55,6 +55,7 @@ export interface GetSalesSenderProfile {
 
 export interface GetSalesMailbox {
   uuid: string;
+  sender_profile_uuid?: string | null;
   sender_name: string | null;
   email: string | null;
   status?: string | null;
@@ -267,6 +268,26 @@ export async function fetchMailbox(mailboxUuid: string): Promise<GetSalesMailbox
   } catch (error) {
     console.error('[getsales] Error fetching mailbox:', error);
     return null;
+  }
+}
+
+export async function fetchMailboxes(): Promise<GetSalesMailbox[]> {
+  try {
+    const url = new URL('/emails/api/mailboxes', GETSALES_BASE_URL);
+    url.searchParams.set('limit', '200');
+    url.searchParams.set('offset', '0');
+    url.searchParams.set('order_field', 'created_at');
+    url.searchParams.set('order_type', 'asc');
+    const response = await fetch(url.toString(), { headers: getHeaders() });
+    if (!response.ok) {
+      console.error('[getsales] Mailboxes list fetch failed:', response.status, await response.text());
+      return [];
+    }
+    const payload = await response.json();
+    return (payload.data || payload || []) as GetSalesMailbox[];
+  } catch (error) {
+    console.error('[getsales] Error fetching mailboxes list:', error);
+    return [];
   }
 }
 

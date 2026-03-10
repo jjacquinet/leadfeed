@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchMailbox, fetchSenderProfiles } from '@/lib/getsales';
+import { fetchMailbox, fetchMailboxes, fetchSenderProfiles } from '@/lib/getsales';
 
 export async function GET() {
   try {
@@ -8,7 +8,21 @@ export async function GET() {
     }
 
     const senderProfiles = await fetchSenderProfiles();
+    const mailboxes = await fetchMailboxes();
+    const mailboxBySenderProfileUuid = new Map<string, { sender_name: string | null; email: string | null }>();
     const mailboxByUuid = new Map<string, { sender_name: string | null; email: string | null }>();
+    for (const mailbox of mailboxes) {
+      if (mailbox.sender_profile_uuid) {
+        mailboxBySenderProfileUuid.set(mailbox.sender_profile_uuid, {
+          sender_name: mailbox.sender_name ?? null,
+          email: mailbox.email ?? null,
+        });
+      }
+      mailboxByUuid.set(mailbox.uuid, {
+        sender_name: mailbox.sender_name ?? null,
+        email: mailbox.email ?? null,
+      });
+    }
 
     await Promise.all(
       senderProfiles.map(async (profile) => {
@@ -26,7 +40,8 @@ export async function GET() {
     const data = senderProfiles
       .filter((profile) => profile.status !== 'disabled')
       .map((profile) => {
-        const mailbox = profile.mailbox_uuid ? mailboxByUuid.get(profile.mailbox_uuid) : undefined;
+        const mailbox = mailboxBySenderProfileUuid.get(profile.uuid)
+          || (profile.mailbox_uuid ? mailboxByUuid.get(profile.mailbox_uuid) : undefined);
         return {
           uuid: profile.uuid,
           first_name: profile.first_name,
