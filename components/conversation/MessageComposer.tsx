@@ -3,6 +3,20 @@
 import { useEffect, useState } from 'react';
 import { MessageChannel, SenderProfile } from '@/lib/types';
 
+const LINKEDIN_SENDER_PROFILES: Record<string, string> = {
+  '06f84941-fd7b-4685-8610-3b533d9df603': 'John Jacquinet',
+  '1dc5c804-3c6b-4f93-a591-f7b877b7f590': 'Antonia Carbone',
+  'fb871e83-4a03-427f-a001-115c304cdd40': 'Juli Hernandez',
+  'e41d23df-9606-4e92-8b56-90e3c1d1b124': 'Andres Villa',
+  'fa7312ff-fb9a-448b-b492-35a7d2fc4749': 'Connor Holland',
+  '55243059-6f28-492f-9a51-4741ff92f7b2': 'Jaime Martinez',
+  '34fd3858-9456-423c-a487-626267630503': 'Charlie Parfet',
+  'bca6e1a4-0d52-4144-83c6-d7bad52efc91': 'Kevin Hepburn',
+  '9ba5beeb-c428-480c-877b-6cc4cdd9aab8': 'Sonia Vargas',
+  'd0cea563-c804-40fb-88a7-a6b9ca4faa6a': 'David Esparza',
+  '0c9784ad-1e07-4879-9ac2-160cda154f4d': 'Michelle Harvin',
+};
+
 interface MessageComposerProps {
   senderProfiles: SenderProfile[];
   onSendNote: (content: string) => Promise<void>;
@@ -26,18 +40,25 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
   const [error, setError] = useState<string | null>(null);
 
   const availableReplyChannels = ['linkedin', 'email'] as const;
-  const selectedSenderProfileUuid = senderProfiles[0]?.uuid || '';
+  const filteredSenderProfiles = senderProfiles.filter((profile) => {
+    if (channel === 'linkedin') {
+      return Boolean(LINKEDIN_SENDER_PROFILES[profile.uuid]);
+    }
+    return true;
+  });
+
+  const selectedSenderProfileUuid = filteredSenderProfiles[0]?.uuid || '';
   const [senderProfileUuid, setSenderProfileUuid] = useState(selectedSenderProfileUuid);
 
   useEffect(() => {
-    if (!senderProfiles.length) {
+    if (!filteredSenderProfiles.length) {
       setSenderProfileUuid('');
       return;
     }
-    if (!senderProfiles.some((profile) => profile.uuid === senderProfileUuid)) {
-      setSenderProfileUuid(senderProfiles[0].uuid);
+    if (!filteredSenderProfiles.some((profile) => profile.uuid === senderProfileUuid)) {
+      setSenderProfileUuid(filteredSenderProfiles[0].uuid);
     }
-  }, [senderProfiles, senderProfileUuid]);
+  }, [filteredSenderProfiles, senderProfileUuid]);
 
   const handleSubmit = async () => {
     if (!content.trim()) return;
@@ -59,7 +80,7 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
         return;
       }
 
-      const selectedProfile = senderProfiles.find((profile) => profile.uuid === senderProfileUuid);
+      const selectedProfile = filteredSenderProfiles.find((profile) => profile.uuid === senderProfileUuid);
       await onSendReply({
         channel,
         senderProfileUuid,
@@ -129,9 +150,17 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
                 onChange={(e) => setSenderProfileUuid(e.target.value)}
                 className="appearance-none bg-gray-100 text-gray-600 text-xs px-2 py-2 pr-6 rounded-lg cursor-pointer focus:ring-2 focus:ring-indigo-500 border-0 max-w-[170px]"
               >
-                {senderProfiles.map((profile) => (
+                {filteredSenderProfiles.map((profile) => (
                   <option key={profile.uuid} value={profile.uuid}>
-                    {profile.label || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Sender'}
+                    {(() => {
+                      const baseLabel = channel === 'linkedin'
+                        ? LINKEDIN_SENDER_PROFILES[profile.uuid]
+                        : (profile.label || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Sender');
+                      if (channel === 'email' && profile.from_email) {
+                        return `${baseLabel} (${profile.from_email})`;
+                      }
+                      return baseLabel;
+                    })()}
                   </option>
                 ))}
               </select>
