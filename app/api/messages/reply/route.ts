@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { lookupContact, sendEmail, sendLinkedInMessage } from '@/lib/getsales';
+import { fetchMailbox, fetchMailboxes, fetchSenderProfiles, lookupContact, sendEmail, sendLinkedInMessage } from '@/lib/getsales';
 
 export async function POST(request: NextRequest) {
   try {
@@ -65,7 +65,32 @@ export async function POST(request: NextRequest) {
       if (!lead.email) {
         return NextResponse.json({ error: 'Lead does not have an email address' }, { status: 400 });
       }
-      if (!body.from_email) {
+
+      let resolvedFromEmail = typeof body.from_email === 'string' ? body.from_email.trim() : '';
+      let resolvedFromName = typeof body.from_name === 'string' ? body.from_name.trim() : '';
+
+      if (!resolvedFromEmail) {
+        const [senderProfiles, mailboxes] = await Promise.all([fetchSenderProfiles(), fetchMailboxes()]);
+        const selectedProfile = senderProfiles.find((profile) => profile.uuid === sender_profile_uuid);
+        const mailboxBySenderProfileUuid = new Map(mailboxes
+          .filter((mailbox) => mailbox.sender_profile_uuid)
+          .map((mailbox) => [mailbox.sender_profile_uuid as string, mailbox]));
+
+        let mailbox = mailboxBySenderProfileUuid.get(sender_profile_uuid);
+        if (!mailbox && selectedProfile?.mailbox_uuid) {
+          mailbox = mailboxes.find((candidate) => candidate.uuid === selectedProfile.mailbox_uuid);
+          if (!mailbox) {
+            mailbox = await fetchMailbox(selectedProfile.mailbox_uuid) ?? undefined;
+          }
+        }
+
+        resolvedFromEmail = mailbox?.email?.trim() || '';
+        if (!resolvedFromName) {
+          resolvedFromName = mailbox?.sender_name?.trim() || '';
+        }
+      }
+
+      if (!resolvedFromEmail) {
         return NextResponse.json({ error: 'Selected sender profile does not have a mailbox email' }, { status: 400 });
       }
 
@@ -73,8 +98,8 @@ export async function POST(request: NextRequest) {
       await sendEmail({
         sender_profile_uuid,
         lead_uuid: leadUuid,
-        from_name: body.from_name || 'Outbounder',
-        from_email: body.from_email || '',
+        from_name: resolvedFromName || 'Outbounder',
+        from_email: resolvedFromEmail,
         to_name: `${lead.first_name} ${lead.last_name}`.trim(),
         to_email: lead.email,
         subject: emailSubject,

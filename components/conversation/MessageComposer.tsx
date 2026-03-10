@@ -40,9 +40,15 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
   const [error, setError] = useState<string | null>(null);
 
   const availableReplyChannels = ['linkedin', 'email'] as const;
-  const filteredSenderProfiles = senderProfiles.filter((profile) => {
+  const uniqueSenderProfiles = senderProfiles.filter((profile, index, array) => {
+    return array.findIndex((candidate) => candidate.uuid === profile.uuid) === index;
+  });
+  const filteredSenderProfiles = uniqueSenderProfiles.filter((profile) => {
     if (channel === 'linkedin') {
       return Boolean(LINKEDIN_SENDER_PROFILES[profile.uuid]);
+    }
+    if (channel === 'email') {
+      return Boolean(profile.from_email && profile.from_email.trim());
     }
     return true;
   });
@@ -81,6 +87,10 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
       }
 
       const selectedProfile = filteredSenderProfiles.find((profile) => profile.uuid === senderProfileUuid);
+      if (channel === 'email' && !selectedProfile?.from_email) {
+        setError('Selected sender profile does not have a mailbox email');
+        return;
+      }
       await onSendReply({
         channel,
         senderProfileUuid,
@@ -148,8 +158,14 @@ export default function MessageComposer({ senderProfiles, onSendNote, onSendRepl
               <select
                 value={senderProfileUuid}
                 onChange={(e) => setSenderProfileUuid(e.target.value)}
-                className="appearance-none bg-gray-100 text-gray-600 text-xs px-2 py-2 pr-6 rounded-lg cursor-pointer focus:ring-2 focus:ring-indigo-500 border-0 max-w-[170px]"
+                disabled={!filteredSenderProfiles.length}
+                className="appearance-none bg-gray-100 text-gray-600 text-xs px-2 py-2 pr-6 rounded-lg cursor-pointer focus:ring-2 focus:ring-indigo-500 border-0 max-w-[220px] disabled:opacity-60"
               >
+                {!filteredSenderProfiles.length && (
+                  <option value="">
+                    {channel === 'email' ? 'No email sender profiles' : 'No sender profiles'}
+                  </option>
+                )}
                 {filteredSenderProfiles.map((profile) => (
                   <option key={profile.uuid} value={profile.uuid}>
                     {(() => {
