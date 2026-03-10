@@ -5,10 +5,14 @@ const GETSALES_BASE_URL = process.env.GETSALES_BASE_URL || 'https://amazing.gets
 function getHeaders(): HeadersInit {
   const apiKey = process.env.GETSALES_API_KEY;
   if (!apiKey) throw new Error('GETSALES_API_KEY not configured');
-  return {
+  const headers: HeadersInit = {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   };
+  if (process.env.GETSALES_TEAM_ID) {
+    headers['Team-ID'] = process.env.GETSALES_TEAM_ID;
+  }
+  return headers;
 }
 
 export interface GetSalesLinkedInMessage {
@@ -37,6 +41,23 @@ export interface GetSalesEmail {
   body_text?: string;
   message?: string;
   [key: string]: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+export interface GetSalesSenderProfile {
+  uuid: string;
+  first_name: string | null;
+  last_name: string | null;
+  label: string | null;
+  status: string | null;
+  mailbox_uuid: string | null;
+  linkedin_account_uuid: string | null;
+}
+
+export interface GetSalesMailbox {
+  uuid: string;
+  sender_name: string | null;
+  email: string | null;
+  status?: string | null;
 }
 
 /**
@@ -212,4 +233,82 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
     console.error('[getsales] Error fetching emails:', error);
     return [];
   }
+}
+
+export async function fetchSenderProfiles(): Promise<GetSalesSenderProfile[]> {
+  try {
+    const url = new URL('/flows/api/sender-profiles', GETSALES_BASE_URL);
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('offset', '0');
+    url.searchParams.set('order_field', 'created_at');
+    url.searchParams.set('order_type', 'asc');
+    const response = await fetch(url.toString(), { headers: getHeaders() });
+    if (!response.ok) {
+      console.error('[getsales] Sender profiles fetch failed:', response.status, await response.text());
+      return [];
+    }
+    const payload = await response.json();
+    return (payload.data || payload || []) as GetSalesSenderProfile[];
+  } catch (error) {
+    console.error('[getsales] Error fetching sender profiles:', error);
+    return [];
+  }
+}
+
+export async function fetchMailbox(mailboxUuid: string): Promise<GetSalesMailbox | null> {
+  try {
+    const url = new URL(`/emails/api/mailboxes/${mailboxUuid}`, GETSALES_BASE_URL);
+    const response = await fetch(url.toString(), { headers: getHeaders() });
+    if (!response.ok) {
+      console.error('[getsales] Mailbox fetch failed:', response.status, await response.text());
+      return null;
+    }
+    return (await response.json()) as GetSalesMailbox;
+  } catch (error) {
+    console.error('[getsales] Error fetching mailbox:', error);
+    return null;
+  }
+}
+
+export async function sendLinkedInMessage(params: {
+  sender_profile_uuid: string;
+  lead_uuid: string;
+  text: string;
+}) {
+  const response = await fetch(`${GETSALES_BASE_URL}/flows/api/linkedin-messages`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(params),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || `LinkedIn send failed (${response.status})`);
+  }
+  return payload;
+}
+
+export async function sendEmail(params: {
+  sender_profile_uuid: string;
+  lead_uuid: string;
+  from_name: string;
+  from_email: string;
+  to_name: string;
+  to_email: string;
+  subject: string;
+  body: string;
+}) {
+  const response = await fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      ...params,
+      cc: [],
+      bcc: [],
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || `Email send failed (${response.status})`);
+  }
+  return payload;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { Lead, Message } from '@/lib/types';
+import { Lead, Message, SenderProfile } from '@/lib/types';
 import ConversationThread from '@/components/conversation/ConversationThread';
 import MessageComposer from '@/components/conversation/MessageComposer';
 import Avatar from '@/components/ui/Avatar';
@@ -8,12 +8,29 @@ import Avatar from '@/components/ui/Avatar';
 interface ConversationPanelProps {
   lead: Lead | null;
   messages: Message[];
-  onSendNote: (content: string) => void;
+  senderProfiles: SenderProfile[];
+  onSendNote: (content: string) => Promise<void>;
+  onSendReply: (payload: {
+    channel: 'linkedin' | 'email';
+    senderProfileUuid: string;
+    content: string;
+    subject?: string;
+    fromName?: string;
+    fromEmail?: string;
+  }) => Promise<void>;
   syncing?: boolean;
   onRefresh?: () => void;
 }
 
-export default function ConversationPanel({ lead, messages, onSendNote, syncing, onRefresh }: ConversationPanelProps) {
+export default function ConversationPanel({
+  lead,
+  messages,
+  senderProfiles,
+  onSendNote,
+  onSendReply,
+  syncing,
+  onRefresh,
+}: ConversationPanelProps) {
   if (!lead) {
     return (
       <div className="flex-1 flex items-center justify-center bg-gray-50">
@@ -79,7 +96,11 @@ export default function ConversationPanel({ lead, messages, onSendNote, syncing,
       <ConversationThread messages={sortedMessages} />
 
       {/* Composer */}
-      <MessageComposer onSendNote={onSendNote} />
+      <MessageComposer
+        senderProfiles={senderProfiles}
+        onSendNote={onSendNote}
+        onSendReply={onSendReply}
+      />
     </div>
   );
 }

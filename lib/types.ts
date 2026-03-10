@@ -38,6 +38,17 @@ export interface Message {
   external_id: string | null;
 }
 
+export interface SenderProfile {
+  uuid: string;
+  first_name: string | null;
+  last_name: string | null;
+  label: string | null;
+  status: string | null;
+  mailbox_uuid: string | null;
+  from_email?: string | null;
+  from_name?: string | null;
+}
+
 export interface WebhookPayload {
   first_name: string;
   last_name: string;

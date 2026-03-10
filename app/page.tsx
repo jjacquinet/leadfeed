@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Lead, LeadStage, Message, STAGE_NAV_ORDER } from '@/lib/types';
+import { Lead, LeadStage, Message, SenderProfile, STAGE_NAV_ORDER } from '@/lib/types';
 import Sidebar from '@/components/layout/Sidebar';
 import ConversationPanel from '@/components/layout/ConversationPanel';
 import DetailPanel from '@/components/layout/DetailPanel';
@@ -12,6 +12,7 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [activeStage, setActiveStage] = useState<LeadStage>('lead_feed');
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
+  const [senderProfiles, setSenderProfiles] = useState<SenderProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({
     message: '',
@@ -61,6 +62,21 @@ export default function HomePage() {
   useEffect(() => {
     fetchLeads();
   }, [fetchLeads]);
+
+  useEffect(() => {
+    const fetchSenderProfiles = async () => {
+      try {
+        const response = await fetch('/api/getsales/sender-profiles');
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setSenderProfiles(data);
+        }
+      } catch (error) {
+        console.error('Error fetching sender profiles:', error);
+      }
+    };
+    fetchSenderProfiles();
+  }, []);
 
   const [syncing, setSyncing] = useState(false);
 
@@ -170,30 +186,74 @@ export default function HomePage() {
   const handleSendNote = async (content: string) => {
     if (!activeLeadId) return;
 
-    try {
-      const response = await fetch('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lead_id: activeLeadId,
-          content,
-          is_note: true,
-          channel: 'linkedin',
-          direction: 'outbound',
-        }),
-      });
+    const response = await fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lead_id: activeLeadId,
+        content,
+        is_note: true,
+        channel: 'linkedin',
+        direction: 'outbound',
+      }),
+    });
 
-      const newMessage = await response.json();
-      if (newMessage.id) {
-        setMessages((prev) => ({
-          ...prev,
-          [activeLeadId]: [...(prev[activeLeadId] || []), newMessage],
-        }));
-        showToast('Note added');
-        fetchLeads();
-      }
-    } catch (error) {
-      console.error('Error sending note:', error);
+    const newMessage = await response.json();
+    if (!response.ok) {
+      throw new Error(newMessage.error || 'Failed to add note');
+    }
+    if (newMessage.id) {
+      setMessages((prev) => ({
+        ...prev,
+        [activeLeadId]: [...(prev[activeLeadId] || []), newMessage],
+      }));
+      showToast('Note added');
+      fetchLeads();
+    }
+  };
+
+  const handleSendReply = async ({
+    channel,
+    senderProfileUuid,
+    content,
+    subject,
+    fromName,
+    fromEmail,
+  }: {
+    channel: 'linkedin' | 'email';
+    senderProfileUuid: string;
+    content: string;
+    subject?: string;
+    fromName?: string;
+    fromEmail?: string;
+  }) => {
+    if (!activeLeadId) return;
+
+    const response = await fetch('/api/messages/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lead_id: activeLeadId,
+        channel,
+        sender_profile_uuid: senderProfileUuid,
+        content,
+        subject,
+        from_name: fromName,
+        from_email: fromEmail,
+      }),
+    });
+
+    const newMessage = await response.json();
+    if (!response.ok) {
+      throw new Error(newMessage.error || newMessage.message || 'Failed to send reply');
+    }
+    if (newMessage.id) {
+      setMessages((prev) => ({
+        ...prev,
+        [activeLeadId]: [...(prev[activeLeadId] || []), newMessage],
+      }));
+      showToast(channel === 'linkedin' ? 'LinkedIn message sent' : 'Email sent');
+      fetchLeads();
     }
   };
 
@@ -357,7 +417,9 @@ export default function HomePage() {
       <ConversationPanel
         lead={activeLead}
         messages={activeMessages}
+        senderProfiles={senderProfiles}
         onSendNote={handleSendNote}
+        onSendReply={handleSendReply}
         syncing={syncing}
         onRefresh={handleRefreshConversation}
       />
