@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { LeadStage } from '@/lib/types';
+import { normalizePhoneNumbers, primaryPhoneFromList } from '@/lib/phones';
 
 export async function GET(request: NextRequest) {
   try {
@@ -71,6 +72,19 @@ export async function PATCH(request: NextRequest) {
     }
 
     updates.updated_at = new Date().toISOString();
+
+    const hasPhoneNumbers = Object.prototype.hasOwnProperty.call(updates, 'phone_numbers');
+    const hasPhone = Object.prototype.hasOwnProperty.call(updates, 'phone');
+
+    if (hasPhoneNumbers) {
+      updates.phone_numbers = normalizePhoneNumbers(updates.phone_numbers);
+      updates.phone = primaryPhoneFromList(updates.phone_numbers);
+    } else if (hasPhone) {
+      const trimmedPhone =
+        typeof updates.phone === 'string' ? updates.phone.trim() : '';
+      updates.phone_numbers = normalizePhoneNumbers([trimmedPhone]);
+      updates.phone = trimmedPhone || null;
+    }
 
     if (updates.stage && updates.stage !== 'snoozed') {
       updates.snoozed_until = null;

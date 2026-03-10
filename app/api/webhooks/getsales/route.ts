@@ -219,7 +219,10 @@ export async function POST(request: NextRequest) {
         updates.getsales_uuid = payload.getsales_uuid;
       }
       if (payload.email && !existingLead.email) updates.email = payload.email;
-      if (payload.phone && !existingLead.phone) updates.phone = payload.phone;
+      if (payload.phone && !existingLead.phone) {
+        updates.phone = payload.phone;
+        updates.phone_numbers = [payload.phone];
+      }
       if (payload.title) updates.title = payload.title;
       if (payload.company) updates.company = payload.company;
       if (payload.company_website && !existingLead.company_website) {
@@ -267,6 +270,7 @@ export async function POST(request: NextRequest) {
           last_name: lastName,
           email: payload.email || null,
           phone: payload.phone || null,
+          phone_numbers: payload.phone ? [payload.phone] : [],
           title: payload.title || null,
           company: payload.company || null,
           linkedin_url: payload.linkedin_url || null,

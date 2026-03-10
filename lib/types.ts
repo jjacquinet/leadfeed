@@ -12,6 +12,7 @@ export interface Lead {
   last_name: string;
   email: string | null;
   phone: string | null;
+  phone_numbers?: string[] | null;
   title: string | null;
   company: string | null;
   linkedin_url: string | null;

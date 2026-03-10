@@ -34,6 +34,8 @@ Required variables:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Your Supabase anon/public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Your Supabase service role key (for webhook) |
 | `WEBHOOK_API_KEY` | Secret key for authenticating webhook requests |
+| `APOLLO_API_KEY` | Apollo API key used for phone enrichment |
+| `APOLLO_BASE_URL` | Apollo API base URL (optional, defaults to `https://api.apollo.io/api/v1`) |
 
 ### 3. Install & Run
 
@@ -101,6 +103,7 @@ The endpoint:
 - **Internal notes** — Add notes that appear in the conversation timeline
 - **Stage transitions** — Move leads through the pipeline with auto-generated system notes
 - **Webhook ingestion** — Receive leads from GetSales.io via n8n
+- **One-click phone enrichment** — Pull phones from Apollo and store up to 5 numbers per lead
 - **Auto-unsnooze** — Expired snoozed leads automatically return to Lead Feed
 - **Seed data** — 10 realistic B2B leads with conversation threads included
 

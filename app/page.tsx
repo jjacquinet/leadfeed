@@ -365,13 +365,13 @@ export default function HomePage() {
     }
   };
 
-  // Handle phone update
-  const handlePhoneUpdate = async (leadId: string, phone: string) => {
+  // Handle phone numbers update
+  const handlePhoneNumbersUpdate = async (leadId: string, phoneNumbers: string[]) => {
     try {
       const response = await fetch('/api/leads', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId, phone }),
+        body: JSON.stringify({ id: leadId, phone_numbers: phoneNumbers }),
       });
 
       const updatedLead = await response.json();
@@ -379,10 +379,39 @@ export default function HomePage() {
         setAllLeads((prev) =>
           prev.map((lead) => (lead.id === leadId ? updatedLead : lead))
         );
-        showToast('Phone number updated');
+        showToast('Phone numbers updated');
       }
     } catch (error) {
-      console.error('Error updating phone number:', error);
+      console.error('Error updating phone numbers:', error);
+    }
+  };
+
+  const handlePhoneEnrich = async (leadId: string) => {
+    try {
+      const response = await fetch('/api/leads/enrich-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: leadId }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to enrich phone numbers');
+      }
+
+      if (payload?.lead?.id) {
+        setAllLeads((prev) =>
+          prev.map((lead) => (lead.id === leadId ? payload.lead : lead))
+        );
+        if (payload.added > 0) {
+          showToast(`Added ${payload.added} phone number${payload.added === 1 ? '' : 's'}`);
+        } else {
+          showToast('No new phone numbers found');
+        }
+      }
+    } catch (error) {
+      console.error('Error enriching phone numbers:', error);
+      showToast(error instanceof Error ? error.message : 'Phone enrichment failed');
     }
   };
 
@@ -428,7 +457,8 @@ export default function HomePage() {
         onStageChange={handleStageChange}
         onSnooze={handleSnooze}
         onUnsnooze={handleUnsnooze}
-        onPhoneUpdate={handlePhoneUpdate}
+        onPhoneNumbersUpdate={handlePhoneNumbersUpdate}
+        onPhoneEnrich={handlePhoneEnrich}
       />
       <Toast
         message={toast.message}
