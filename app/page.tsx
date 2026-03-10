@@ -114,12 +114,10 @@ export default function HomePage() {
           l.stage === 'lead_feed' ||
           (l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) <= new Date())
       ).length;
-    } else if (stage === 'snoozed') {
+    } else {
       acc[stage] = allLeads.filter(
         (l) => l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) > new Date()
       ).length;
-    } else {
-      acc[stage] = allLeads.filter((l) => l.stage === stage).length;
     }
     return acc;
   }, {} as Record<LeadStage, number>);
