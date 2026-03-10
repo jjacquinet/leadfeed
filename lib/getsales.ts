@@ -29,6 +29,7 @@ export interface GetSalesEmail {
   uuid: string;
   subject: string;
   body: string;
+  email_body_uuid?: string | null;
   type: 'outbox' | 'inbox';
   sent_at: string | null;
   status: string;
@@ -181,6 +182,32 @@ export async function fetchEmailDetail(emailUuid: string): Promise<GetSalesEmail
   }
 }
 
+async function fetchEmailBodyByUuid(emailBodyUuid: string): Promise<string | null> {
+  const candidatePaths = [
+    `/emails/api/email-bodies/${emailBodyUuid}`,
+    `/emails/api/email-body/${emailBodyUuid}`,
+    `/emails/api/email-bodies/uuid/${emailBodyUuid}`,
+  ];
+
+  for (const path of candidatePaths) {
+    try {
+      const url = new URL(path, GETSALES_BASE_URL);
+      const response = await fetch(url.toString(), { headers: getHeaders() });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const data = payload?.data || payload;
+      const body = data?.body || data?.content || data?.emailBodyDomain?.body || data?.email_body_domain?.body || '';
+      if (typeof body === 'string' && body.trim()) {
+        return body;
+      }
+    } catch {
+      // Try next candidate endpoint
+    }
+  }
+
+  return null;
+}
+
 function extractEmailBody(payload: GetSalesEmail | null | undefined): string {
   if (!payload) return '';
   return (
@@ -242,6 +269,13 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
           const detailBody = extractEmailBody(detail);
           if (detailBody) {
             return { ...email, body: detailBody };
+          }
+        }
+
+        if (email.email_body_uuid) {
+          const bodyByUuid = await fetchEmailBodyByUuid(email.email_body_uuid);
+          if (bodyByUuid) {
+            return { ...email, body: bodyByUuid };
           }
         }
 
