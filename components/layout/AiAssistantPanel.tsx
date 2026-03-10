@@ -92,7 +92,7 @@ export default function AiAssistantPanel({
 
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.error || payload.message || 'Failed to get AI response');
+        throw new Error(payload.message || payload.error || 'Failed to get AI response');
       }
 
       setTurns((current) => [

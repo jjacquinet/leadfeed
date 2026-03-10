@@ -144,6 +144,16 @@ async function executeTool(name: string, input: Record<string, unknown>, activeL
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        {
+          error: 'AI chat is not configured',
+          message: 'ANTHROPIC_API_KEY is missing on the server environment.',
+        },
+        { status: 500 }
+      );
+    }
+
     const payload = (await request.json()) as AiChatRequest;
     const message = payload.message?.trim();
     const uiContext = payload.uiContext || {};
@@ -242,7 +252,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!finalText) {
-      throw new Error('Claude did not return a final response');
+      finalText = 'I could not complete that request. Please try again with a more specific prompt.';
     }
 
     const { cleanedText, actions } = parseActions(finalText);
@@ -256,10 +266,21 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
     console.error('[ai/chat] failed', { elapsedMs, error });
+    const message = error instanceof Error ? error.message : String(error);
+    const missingConfig = /ANTHROPIC_API_KEY/i.test(message);
+    const authError = /Anthropic API error \(401\)|invalid api key|authentication/i.test(message);
+    const modelError = /model/i.test(message) && /Anthropic API error \(400\)/i.test(message);
+
     return NextResponse.json(
       {
-        error: 'Failed to process AI chat request',
-        message: error instanceof Error ? error.message : String(error),
+        error: missingConfig
+          ? 'AI chat is not configured'
+          : authError
+            ? 'AI chat authentication failed'
+            : modelError
+              ? 'AI model configuration error'
+              : 'Failed to process AI chat request',
+        message,
       },
       { status: 500 }
     );
