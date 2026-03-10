@@ -40,6 +40,10 @@ export interface GetSalesEmail {
   body_html?: string;
   body_text?: string;
   message?: string;
+  email_body?: { body?: string; content?: string } | null;
+  emailBody?: { body?: string; content?: string } | null;
+  email_body_domain?: { body?: string; content?: string } | null;
+  emailBodyDomain?: { body?: string; content?: string } | null;
   [key: string]: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
@@ -177,6 +181,28 @@ export async function fetchEmailDetail(emailUuid: string): Promise<GetSalesEmail
   }
 }
 
+function extractEmailBody(payload: GetSalesEmail | null | undefined): string {
+  if (!payload) return '';
+  return (
+    payload.body ||
+    payload.text ||
+    payload.content ||
+    payload.html_body ||
+    payload.body_html ||
+    payload.body_text ||
+    payload.message ||
+    payload.email_body?.body ||
+    payload.email_body?.content ||
+    payload.emailBody?.body ||
+    payload.emailBody?.content ||
+    payload.email_body_domain?.body ||
+    payload.email_body_domain?.content ||
+    payload.emailBodyDomain?.body ||
+    payload.emailBodyDomain?.content ||
+    ''
+  );
+}
+
 /**
  * Fetch email messages for a contact from GetSales.io API
  */
@@ -202,34 +228,28 @@ export async function fetchEmails(leadUuid: string): Promise<GetSalesEmail[]> {
       console.log(`[getsales] RAW first email object: ${JSON.stringify(emails[0])}`);
     }
 
-    // Try to resolve body from alternative field names
-    for (const email of emails) {
-      if (!email.body) {
-        email.body = email.text || email.content || email.html_body || email.body_html || email.body_text || email.message || '';
-      }
-    }
+    // Resolve body from list payload first, then fetch per-email detail for missing bodies.
+    const withBodies = await Promise.all(
+      emails.map(async (email) => {
+        const listBody = extractEmailBody(email);
+        if (listBody) {
+          return { ...email, body: listBody };
+        }
 
-    // If list endpoint returns empty bodies, fetch individual emails for full content
-    const needsDetail = emails.length > 0 && !emails[0].body;
-    if (needsDetail) {
-      console.log(`[getsales] Email list missing bodies, fetching ${emails.length} individual emails...`);
-      const detailed = await Promise.all(
-        emails.map(async (email) => {
-          const detail = await fetchEmailDetail(email.uuid);
-          if (detail) {
-            console.log(`[getsales] RAW email detail for ${email.uuid}: ${JSON.stringify(detail)}`);
-            const detailBody = detail.body || detail.text || detail.content || detail.html_body || detail.body_html || detail.body_text || detail.message || '';
-            if (detailBody) {
-              return { ...email, body: detailBody };
-            }
+        const detail = await fetchEmailDetail(email.uuid);
+        if (detail) {
+          console.log(`[getsales] RAW email detail for ${email.uuid}: ${JSON.stringify(detail)}`);
+          const detailBody = extractEmailBody(detail);
+          if (detailBody) {
+            return { ...email, body: detailBody };
           }
-          return email;
-        })
-      );
-      return detailed;
-    }
+        }
 
-    return emails;
+        return email;
+      })
+    );
+
+    return withBodies;
   } catch (error) {
     console.error('[getsales] Error fetching emails:', error);
     return [];
