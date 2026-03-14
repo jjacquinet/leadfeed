@@ -60,16 +60,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fetch existing messages (with content) to check for missing bodies
-    const { data: existingMessages } = await supabase
-      .from('messages')
-      .select('id, external_id, content, channel')
-      .eq('lead_id', leadId)
-      .not('external_id', 'is', null);
+    const { data: existingActivities } = await supabase
+      .from('activities')
+      .select('id, metadata')
+      .eq('lead_id', leadId);
 
-    const existingExternalIds = new Set(
-      (existingMessages || []).map((m) => m.external_id)
-    );
+    const existingExternalIds = new Set<string>();
+    for (const activity of existingActivities || []) {
+      const externalId = activity?.metadata?.external_id;
+      if (typeof externalId === 'string' && externalId) {
+        existingExternalIds.add(externalId);
+      }
+    }
 
     // Fetch LinkedIn messages and emails in parallel
     const [linkedinMessages, emails] = await Promise.all([
@@ -79,14 +81,14 @@ export async function POST(request: NextRequest) {
 
     console.log(`[sync] Lead ${lead.first_name} ${lead.last_name}: ${linkedinMessages.length} LinkedIn msgs, ${emails.length} emails`);
 
-    const newMessages: {
+    const newActivities: {
       lead_id: string;
+      type: string;
       channel: string;
       direction: string;
       content: string;
-      is_note: boolean;
-      timestamp: string;
-      external_id: string;
+      metadata: Record<string, unknown>;
+      created_at: string;
     }[] = [];
 
     // Process LinkedIn messages
@@ -95,14 +97,14 @@ export async function POST(request: NextRequest) {
       if (existingExternalIds.has(externalId)) continue;
       if (!msg.text || msg.text.trim() === '') continue;
 
-      newMessages.push({
+      newActivities.push({
         lead_id: leadId,
+        type: msg.type === 'inbox' ? 'linkedin_received' : 'linkedin_sent',
         channel: 'linkedin',
         direction: msg.type === 'inbox' ? 'inbound' : 'outbound',
         content: msg.text,
-        is_note: false,
-        timestamp: msg.sent_at || new Date().toISOString(),
-        external_id: externalId,
+        metadata: { external_id: externalId, source: 'getsales_sync' },
+        created_at: msg.sent_at || new Date().toISOString(),
       });
     }
 
@@ -136,97 +138,49 @@ export async function POST(request: NextRequest) {
 
       console.log(`[sync] Email "${email.subject}" body length: ${body.length}, preview: "${body.substring(0, 100)}"`);
 
-      newMessages.push({
+      newActivities.push({
         lead_id: leadId,
+        type: email.type === 'inbox' ? 'email_received' : 'email_sent',
         channel: 'email',
         direction: email.type === 'inbox' ? 'inbound' : 'outbound',
         content,
-        is_note: false,
-        timestamp: email.sent_at || new Date().toISOString(),
-        external_id: externalId,
+        metadata: { external_id: externalId, source: 'getsales_sync' },
+        created_at: email.sent_at || new Date().toISOString(),
       });
     }
 
-    // Update existing email messages that were synced without bodies
-    const existingEmailMap = new Map(
-      (existingMessages || [])
-        .filter((m) => m.channel === 'email' && m.external_id)
-        .map((m) => [m.external_id, m])
-    );
-
-    let updatedCount = 0;
-    for (const email of emails) {
-      const externalId = `gs_em_${email.uuid}`;
-      const existing = existingEmailMap.get(externalId);
-      if (!existing) continue;
-
-      // Check if existing message is missing body (only has subject)
-      const contentLines = (existing.content || '').split('\n').filter((l: string) => l.trim());
-      const hasOnlySubject = contentLines.length <= 1 || (contentLines.length === 2 && contentLines[0].startsWith('**'));
-
-      if (hasOnlySubject && email.body) {
-        let body = email.body;
-        if (body.includes('<') && body.includes('>')) {
-          body = body
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<\/p>/gi, '\n\n')
-            .replace(/<\/div>/gi, '\n')
-            .replace(/<[^>]+>/g, '')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-        }
-
-        if (body.trim()) {
-          const content = email.subject
-            ? `**${email.subject}**\n\n${body}`
-            : body;
-          console.log(`[sync] Updating existing email "${email.subject}" with body (${body.length} chars)`);
-          await supabase
-            .from('messages')
-            .update({ content })
-            .eq('id', existing.id);
-          updatedCount++;
-        }
-      }
-    }
-
-    if (updatedCount > 0) {
-      console.log(`[sync] Updated ${updatedCount} existing emails with body content`);
-    }
-
-    // Insert new messages
-    if (newMessages.length > 0) {
-      const { error: insertError } = await supabase.from('messages').insert(newMessages);
+    // Insert new activities
+    if (newActivities.length > 0) {
+      const { error: insertError } = await supabase.from('activities').insert(newActivities);
       if (insertError) {
-        console.error('[sync] Insert error:', insertError);
-        return NextResponse.json({ error: 'Failed to insert messages' }, { status: 500 });
+        console.error('[sync] Insert activities error:', insertError);
+        return NextResponse.json({ error: 'Failed to insert activities' }, { status: 500 });
       }
 
-      // Update lead's last_activity
-      const latestTimestamp = newMessages
-        .map((m) => new Date(m.timestamp).getTime())
+      const latestTimestamp = newActivities
+        .map((m) => new Date(m.created_at).getTime())
         .reduce((a, b) => Math.max(a, b), 0);
+      const hasInbound = newActivities.some((a) => a.direction === 'inbound');
 
       await supabase
         .from('leads')
         .update({
           last_activity: new Date(latestTimestamp).toISOString(),
+          last_activity_at: new Date(latestTimestamp).toISOString(),
+          ...(hasInbound ? {
+            has_unread: true,
+            last_inbound_at: new Date(latestTimestamp).toISOString(),
+          } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq('id', leadId);
     }
 
-    console.log(`[sync] Synced ${newMessages.length} new, updated ${updatedCount} existing for lead ${leadId}`);
+    console.log(`[sync] Synced ${newActivities.length} new activities for lead ${leadId}`);
 
     return NextResponse.json({
-      synced: newMessages.length,
-      updated: updatedCount,
+      synced: newActivities.length,
+      updated: 0,
       linkedin: linkedinMessages.length,
       emails: emails.length,
     });

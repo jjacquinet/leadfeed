@@ -1,6 +1,6 @@
 'use client';
 
-import { LeadStage, STAGE_LABELS } from '@/lib/types';
+import { LeadStage } from '@/lib/types';
 
 interface LeadStageSelectorProps {
   currentStage: LeadStage;

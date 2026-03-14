@@ -108,31 +108,46 @@ export async function POST(request: NextRequest) {
       messageContent = `**${emailSubject}**\n\n${messageText}`;
     }
 
-    const { data: newMessage, error: insertError } = await supabase
-      .from('messages')
+    const activityType =
+      channel === 'linkedin'
+        ? 'linkedin_sent'
+        : 'email_sent';
+
+    const { data: newActivity, error: insertError } = await supabase
+      .from('activities')
       .insert({
         lead_id,
+        type: activityType,
         channel,
         direction: 'outbound',
         content: messageContent,
-        is_note: false,
-        timestamp: now,
-        external_id: externalId,
+        metadata: externalId ? { external_id: externalId } : null,
+        created_at: now,
       })
       .select()
       .single();
 
     if (insertError) {
-      console.error('[reply] Failed to store message:', insertError);
+      console.error('[reply] Failed to store activity:', insertError);
       return NextResponse.json({ error: 'Message sent but failed to save locally' }, { status: 500 });
     }
 
     await supabase
       .from('leads')
-      .update({ last_activity: now, updated_at: now })
+      .update({ last_activity: now, last_activity_at: now, updated_at: now })
       .eq('id', lead_id);
 
-    return NextResponse.json(newMessage);
+    return NextResponse.json({
+      id: newActivity.id,
+      lead_id,
+      channel,
+      direction: 'outbound',
+      content: messageContent,
+      is_note: false,
+      timestamp: newActivity.created_at,
+      created_at: newActivity.created_at,
+      external_id: externalId,
+    });
   } catch (error) {
     console.error('[reply] Error:', error);
     return NextResponse.json({ error: 'Failed to send reply', message: String(error) }, { status: 500 });

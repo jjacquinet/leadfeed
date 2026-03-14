@@ -45,7 +45,7 @@ export interface GetSalesEmail {
   emailBody?: { body?: string; content?: string } | null;
   email_body_domain?: { body?: string; content?: string } | null;
   emailBodyDomain?: { body?: string; content?: string } | null;
-  [key: string]: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 }
 
 export interface GetSalesSenderProfile {

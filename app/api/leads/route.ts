@@ -1,35 +1,69 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { LeadStage } from '@/lib/types';
 import { normalizePhoneNumbers, primaryPhoneFromList } from '@/lib/phones';
+
+type QueueLead = {
+  id: string;
+  has_unread: boolean | null;
+  last_inbound_at: string | null;
+  last_activity_at: string | null;
+  updated_at: string;
+};
+
+function sortQueueLeads(leads: QueueLead[]): QueueLead[] {
+  return leads.sort((a, b) => {
+    const aUnread = Boolean(a.has_unread);
+    const bUnread = Boolean(b.has_unread);
+    if (aUnread && !bUnread) return -1;
+    if (!aUnread && bUnread) return 1;
+
+    if (aUnread && bUnread) {
+      const aInbound = a.last_inbound_at ? new Date(a.last_inbound_at).getTime() : 0;
+      const bInbound = b.last_inbound_at ? new Date(b.last_inbound_at).getTime() : 0;
+      return bInbound - aInbound;
+    }
+
+    const aActivity = a.last_activity_at ? new Date(a.last_activity_at).getTime() : Number.MAX_SAFE_INTEGER;
+    const bActivity = b.last_activity_at ? new Date(b.last_activity_at).getTime() : Number.MAX_SAFE_INTEGER;
+    return aActivity - bActivity;
+  });
+}
 
 export async function GET(request: NextRequest) {
   try {
     const supabase = getSupabase();
     const { searchParams } = new URL(request.url);
-    const stage = searchParams.get('stage') as LeadStage | null;
+    const status = searchParams.get('status');
+    const stage = searchParams.get('stage');
+    const repliesOnly = searchParams.get('replies') === 'true';
+    const now = new Date().toISOString();
+
+    // Promote expired snoozed leads to active for queue correctness.
+    await supabase
+      .from('leads')
+      .update({
+        status: 'active',
+        stage: 'lead_feed',
+        snooze_until: null,
+        snoozed_until: null,
+        updated_at: now,
+      })
+      .eq('status', 'snoozed')
+      .lte('snooze_until', now);
 
     let query = supabase.from('leads').select('*');
 
-    if (stage === 'lead_feed') {
-      // Include leads where snooze has expired (auto-promote)
-      query = query.or('stage.eq.lead_feed,and(stage.eq.snoozed,snoozed_until.lte.' + new Date().toISOString() + ')');
-    } else if (stage) {
-      if (stage === 'snoozed') {
-        // Only show snoozed leads that haven't expired
-        query = query.eq('stage', 'snoozed').gt('snoozed_until', new Date().toISOString());
-      } else {
-        query = query.eq('stage', stage);
-      }
-    }
-
-    // Sort based on stage
-    if (stage === 'snoozed') {
-      query = query.order('snoozed_until', { ascending: true });
-    } else if (stage === 'lead_feed') {
-      query = query.order('last_activity', { ascending: false });
-    } else {
-      query = query.order('updated_at', { ascending: false });
+    // Backward compatibility with older stage query params.
+    if (!status && stage === 'lead_feed') {
+      query = query.eq('status', 'active');
+    } else if (!status && stage === 'snoozed') {
+      query = query.eq('status', 'snoozed').gt('snooze_until', now);
+    } else if (status === 'active') {
+      query = query.eq('status', 'active');
+    } else if (status === 'snoozed') {
+      query = query.eq('status', 'snoozed').gt('snooze_until', now);
+    } else if (status === 'archived') {
+      query = query.eq('status', 'archived');
     }
 
     const { data, error } = await query;
@@ -39,22 +73,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 });
     }
 
-    // Auto-promote expired snoozed leads
-    if (stage === 'lead_feed' && data) {
-      const expiredSnoozed = data.filter(
-        (lead) => lead.stage === 'snoozed' && lead.snoozed_until && new Date(lead.snoozed_until) <= new Date()
-      );
-      for (const lead of expiredSnoozed) {
-        await supabase
-          .from('leads')
-          .update({ stage: 'lead_feed', snoozed_until: null, updated_at: new Date().toISOString() })
-          .eq('id', lead.id);
-        lead.stage = 'lead_feed';
-        lead.snoozed_until = null;
-      }
+    let leads = Array.isArray(data) ? data : [];
+    if (repliesOnly) {
+      leads = leads.filter((lead) => Boolean(lead.has_unread));
     }
 
-    return NextResponse.json(data);
+    if (!status || status === 'active' || stage === 'lead_feed') {
+      leads = sortQueueLeads(leads as QueueLead[]);
+    } else if (status === 'snoozed' || stage === 'snoozed') {
+      leads.sort((a, b) => {
+        const aAt = a.snooze_until ? new Date(a.snooze_until).getTime() : Number.MAX_SAFE_INTEGER;
+        const bAt = b.snooze_until ? new Date(b.snooze_until).getTime() : Number.MAX_SAFE_INTEGER;
+        return aAt - bAt;
+      });
+    } else {
+      leads.sort(
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
+    }
+
+    return NextResponse.json(leads);
   } catch (error) {
     console.error('Error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -71,7 +110,8 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Missing lead id' }, { status: 400 });
     }
 
-    updates.updated_at = new Date().toISOString();
+    const now = new Date().toISOString();
+    updates.updated_at = now;
 
     const hasPhoneNumbers = Object.prototype.hasOwnProperty.call(updates, 'phone_numbers');
     const hasPhone = Object.prototype.hasOwnProperty.call(updates, 'phone');
@@ -86,8 +126,34 @@ export async function PATCH(request: NextRequest) {
       updates.phone = trimmedPhone || null;
     }
 
-    if (updates.stage && updates.stage !== 'snoozed') {
+    if (updates.status && updates.status !== 'snoozed') {
+      updates.snooze_until = null;
       updates.snoozed_until = null;
+    }
+
+    if (updates.snooze_until) {
+      updates.status = 'snoozed';
+      updates.stage = 'snoozed';
+      updates.snoozed_until = updates.snooze_until;
+    }
+
+    if (updates.status === 'active') {
+      updates.stage = 'lead_feed';
+    }
+    if (updates.status === 'archived') {
+      updates.stage = 'snoozed';
+    }
+
+    if (updates.has_unread === false && !Object.prototype.hasOwnProperty.call(updates, 'last_inbound_at')) {
+      updates.last_inbound_at = updates.last_inbound_at ?? null;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(updates, 'last_activity_at')) {
+      updates.last_activity_at = now;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(updates, 'last_activity')) {
+      updates.last_activity = updates.last_activity_at;
     }
 
     const { data, error } = await supabase

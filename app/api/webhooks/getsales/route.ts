@@ -174,10 +174,6 @@ export async function POST(request: NextRequest) {
     const payload = normalizePayload(rawPayload);
     console.log('[webhook] Normalized:', JSON.stringify(payload, null, 2));
 
-    // Use fallback names if not found — NEVER reject a payload
-    const firstName = payload.first_name || 'Unknown';
-    const lastName = payload.last_name || 'Contact';
-
     const supabase = getServiceClient();
     const now = new Date().toISOString();
 
@@ -210,113 +206,84 @@ export async function POST(request: NextRequest) {
       existingLead = data;
     }
 
-    if (existingLead) {
-      const updates: Record<string, unknown> = {
-        updated_at: now,
-        last_activity: now,
-      };
-      if (payload.getsales_uuid && !existingLead.getsales_uuid) {
-        updates.getsales_uuid = payload.getsales_uuid;
-      }
-      if (payload.email && !existingLead.email) updates.email = payload.email;
-      if (payload.phone && !existingLead.phone) {
-        updates.phone = payload.phone;
-        updates.phone_numbers = [payload.phone];
-      }
-      if (payload.title) updates.title = payload.title;
-      if (payload.company) updates.company = payload.company;
-      if (payload.company_website && !existingLead.company_website) {
-        updates.company_website = payload.company_website;
-      }
-
-      if (existingLead.stage === 'snoozed') {
-        updates.stage = 'lead_feed';
-        updates.snoozed_until = null;
-      }
-
-      await supabase.from('leads').update(updates).eq('id', existingLead.id);
-
-      // Add messages
-      if (payload.messages.length > 0) {
-        const msgs = payload.messages.map((msg) => ({
-          lead_id: existingLead.id,
-          channel: payload.channel || 'linkedin',
-          direction: msg.direction,
-          content: msg.content,
-          is_note: false,
-          timestamp: msg.timestamp || now,
-        }));
-        await supabase.from('messages').insert(msgs);
-      }
-
-      // Store raw payload as a debug note
-      await supabase.from('messages').insert({
-        lead_id: existingLead.id,
-        channel: 'linkedin',
-        direction: 'outbound',
-        content: `[Raw webhook payload]\n${JSON.stringify(rawPayload, null, 2).substring(0, 3000)}`,
-        is_note: true,
-        timestamp: now,
-      });
-
-      console.log('[webhook] Updated lead:', existingLead.id);
-      return NextResponse.json({ success: true, action: 'updated', lead_id: existingLead.id });
-
-    } else {
-      const { data: newLead, error: leadError } = await supabase
-        .from('leads')
-        .insert({
-          first_name: firstName,
-          last_name: lastName,
-          email: payload.email || null,
-          phone: payload.phone || null,
-          phone_numbers: payload.phone ? [payload.phone] : [],
-          title: payload.title || null,
-          company: payload.company || null,
-          linkedin_url: payload.linkedin_url || null,
-          company_website: payload.company_website || null,
-          getsales_uuid: payload.getsales_uuid || null,
-          stage: 'lead_feed',
-          source: 'getsales_webhook',
-          campaign_name: payload.campaign_name || null,
-          created_at: now,
-          updated_at: now,
-          last_activity: now,
-        })
-        .select()
-        .single();
-
-      if (leadError || !newLead) {
-        console.error('[webhook] DB error:', leadError);
-        return NextResponse.json({ error: 'DB insert failed', details: leadError }, { status: 500 });
-      }
-
-      // Add messages
-      if (payload.messages.length > 0) {
-        const msgs = payload.messages.map((msg) => ({
-          lead_id: newLead.id,
-          channel: payload.channel || 'linkedin',
-          direction: msg.direction,
-          content: msg.content,
-          is_note: false,
-          timestamp: msg.timestamp || now,
-        }));
-        await supabase.from('messages').insert(msgs);
-      }
-
-      // Store raw payload as a debug note so we can inspect it in the app
-      await supabase.from('messages').insert({
-        lead_id: newLead.id,
-        channel: 'linkedin',
-        direction: 'outbound',
-        content: `[Raw webhook payload]\n${JSON.stringify(rawPayload, null, 2).substring(0, 3000)}`,
-        is_note: true,
-        timestamp: now,
-      });
-
-      console.log('[webhook] Created lead:', newLead.id, `(${firstName} ${lastName})`);
-      return NextResponse.json({ success: true, action: 'created', lead_id: newLead.id });
+    // Daily Lead Feed V1 rule:
+    // if inbound does not match an existing lead, ignore here (prospect remains in inbox world).
+    if (!existingLead) {
+      return NextResponse.json({ success: true, action: 'ignored_unknown_sender' });
     }
+
+    const updates: Record<string, unknown> = {
+      updated_at: now,
+      last_activity: now,
+      last_activity_at: now,
+    };
+    if (payload.getsales_uuid && !existingLead.getsales_uuid) {
+      updates.getsales_uuid = payload.getsales_uuid;
+    }
+    if (payload.email && !existingLead.email) updates.email = payload.email;
+    if (payload.phone && !existingLead.phone) {
+      updates.phone = payload.phone;
+      updates.phone_numbers = [payload.phone];
+    }
+    if (payload.title) updates.title = payload.title;
+    if (payload.company) updates.company = payload.company;
+    if (payload.company_website && !existingLead.company_website) {
+      updates.company_website = payload.company_website;
+    }
+
+    if (existingLead.status === 'snoozed' || existingLead.stage === 'snoozed') {
+      updates.status = 'active';
+      updates.stage = 'lead_feed';
+      updates.snooze_until = null;
+      updates.snoozed_until = null;
+    }
+
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+    const hasInbound = messages.some((msg) => msg.direction === 'inbound');
+    if (hasInbound) {
+      updates.has_unread = true;
+      updates.last_inbound_at = now;
+    }
+
+    await supabase.from('leads').update(updates).eq('id', existingLead.id);
+
+    if (messages.length > 0) {
+      const normalizedChannel =
+        payload.channel === 'email' || payload.channel === 'text'
+          ? payload.channel
+          : 'linkedin';
+
+      const activities = messages.map((msg) => {
+        const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
+        const type =
+          normalizedChannel === 'email'
+            ? direction === 'inbound'
+              ? 'email_received'
+              : 'email_sent'
+            : normalizedChannel === 'text'
+              ? direction === 'inbound'
+                ? 'text_received'
+                : 'text_sent'
+              : direction === 'inbound'
+                ? 'linkedin_received'
+                : 'linkedin_sent';
+
+        return {
+          lead_id: existingLead.id,
+          type,
+          channel: normalizedChannel,
+          direction,
+          content: msg.content,
+          metadata: { source: 'getsales_webhook' },
+          created_at: msg.timestamp || now,
+        };
+      });
+
+      await supabase.from('activities').insert(activities);
+    }
+
+    console.log('[webhook] Updated lead:', existingLead.id);
+    return NextResponse.json({ success: true, action: 'updated', lead_id: existingLead.id });
   } catch (error) {
     console.error('[webhook] Unhandled error:', error);
     return NextResponse.json({ error: 'Internal server error', message: String(error) }, { status: 500 });

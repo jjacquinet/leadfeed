@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { LeadStage, STAGE_NAV_ORDER } from '@/lib/types';
+import { LeadStage } from '@/lib/types';
 
 export async function GET() {
   try {
@@ -9,7 +9,7 @@ export async function GET() {
 
     const { data: leads, error } = await supabase
       .from('leads')
-      .select('id, stage, snoozed_until');
+      .select('id, status, stage, snooze_until, snoozed_until');
 
     if (error) {
       console.error('Error fetching lead counts:', error);
@@ -22,14 +22,16 @@ export async function GET() {
     };
 
     for (const lead of leads || []) {
-      if (lead.stage === 'snoozed' && lead.snoozed_until) {
-        if (new Date(lead.snoozed_until) <= new Date(now)) {
+      const status = lead.status || (lead.stage === 'snoozed' ? 'snoozed' : 'active');
+      const snoozeUntil = lead.snooze_until || lead.snoozed_until;
+      if (status === 'snoozed' && snoozeUntil) {
+        if (new Date(snoozeUntil) <= new Date(now)) {
           counts.lead_feed++;
         } else {
           counts.snoozed++;
         }
-      } else if (lead.stage in counts) {
-        counts[lead.stage as LeadStage]++;
+      } else if (status === 'active') {
+        counts.lead_feed++;
       }
     }
 

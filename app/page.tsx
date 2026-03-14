@@ -1,506 +1,560 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Lead, LeadStage, Message, SenderProfile, STAGE_NAV_ORDER } from '@/lib/types';
-import Sidebar from '@/components/layout/Sidebar';
-import ConversationPanel from '@/components/layout/ConversationPanel';
-import DetailPanel from '@/components/layout/DetailPanel';
-import AiAssistantPanel from '@/components/layout/AiAssistantPanel';
-import ResizableRightPanel from '@/components/layout/ResizableRightPanel';
-import AiPanelErrorBoundary from '@/components/layout/AiPanelErrorBoundary';
-import Toast from '@/components/ui/Toast';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, Lead } from '@/lib/types';
+
+type FeedTab = 'all' | 'replies' | 'done';
+type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
+
+const STAGE_LABELS: Record<string, string> = {
+  lead: 'Lead',
+  conversation: 'Conversation',
+  demo_scheduled: 'Demo Scheduled',
+  proposal_sent: 'Proposal Sent',
+  contract_sent: 'Contract Sent',
+};
+
+const SNOOZE_OPTIONS: Array<{ label: string; days: number }> = [
+  { label: 'Tomorrow', days: 1 },
+  { label: '3 Days', days: 3 },
+  { label: '1 Week', days: 7 },
+  { label: '2 Weeks', days: 14 },
+  { label: '1 Month', days: 30 },
+  { label: '3 Months', days: 90 },
+];
+
+function fullName(lead: Lead): string {
+  if (lead.name) return lead.name;
+  return `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Unknown Lead';
+}
+
+function fmtRelative(iso?: string | null): string {
+  if (!iso) return 'Never';
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return 'Unknown';
+  const diffMin = Math.floor((Date.now() - ms) / 60000);
+  if (diffMin < 1) return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
+function addDays(days: number): string {
+  const dt = new Date();
+  dt.setDate(dt.getDate() + days);
+  return dt.toISOString();
+}
+
+function eventLabel(activity: Activity): string {
+  const map: Record<string, string> = {
+    email_sent: 'You sent email',
+    email_received: 'Received email',
+    linkedin_sent: 'You sent LinkedIn',
+    linkedin_received: 'Received LinkedIn',
+    call: 'Call',
+    text_sent: 'Text sent',
+    text_received: 'Text received',
+    note: 'Note',
+  };
+  return map[activity.type] || activity.type;
+}
+
+function bubbleClass(activity: Activity): string {
+  if (activity.direction === 'inbound') return 'bg-white border border-slate-200 text-slate-700';
+  if (activity.type.startsWith('email')) return 'bg-indigo-50 border border-indigo-100 text-slate-700';
+  if (activity.type.startsWith('linkedin')) return 'bg-blue-50 border border-blue-100 text-slate-700';
+  if (activity.type.startsWith('text')) return 'bg-violet-50 border border-violet-100 text-slate-700';
+  if (activity.type === 'call') return 'bg-amber-50 border border-amber-100 text-slate-700';
+  return 'bg-slate-50 border border-slate-200 text-slate-700';
+}
 
 export default function HomePage() {
-  const [allLeads, setAllLeads] = useState<Lead[]>([]);
-  const [messages, setMessages] = useState<Record<string, Message[]>>({});
-  const [activeStage, setActiveStage] = useState<LeadStage>('lead_feed');
-  const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
-  const [senderProfiles, setSenderProfiles] = useState<SenderProfile[]>([]);
-  const [composerDraft, setComposerDraft] = useState<{
-    channel: 'linkedin' | 'email';
-    subject?: string;
-    content: string;
-  } | null>(null);
-  const [composerDraftVersion, setComposerDraftVersion] = useState(0);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [activitiesByLead, setActivitiesByLead] = useState<Record<string, Activity[]>>({});
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [tab, setTab] = useState<FeedTab>('all');
+  const [composeChannel, setComposeChannel] = useState<ComposeChannel>('email');
+  const [composeText, setComposeText] = useState('');
+  const [callNotes, setCallNotes] = useState('');
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [showSnoozeBar, setShowSnoozeBar] = useState(false);
+  const [snoozedCount, setSnoozedCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState<{ message: string; visible: boolean }>({
-    message: '',
-    visible: false,
-  });
+  const [refreshing, setRefreshing] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(300);
+  const [rightWidth, setRightWidth] = useState(260);
+  const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
 
-  const showToast = useCallback((message: string) => {
-    setToast({ message, visible: true });
-  }, []);
+  const selectedLead = useMemo(
+    () => leads.find((lead) => lead.id === selectedLeadId) ?? null,
+    [leads, selectedLeadId]
+  );
+  const selectedActivities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
 
-  const hideToast = useCallback(() => {
-    setToast((prev) => ({ ...prev, visible: false }));
-  }, []);
+  const loadLeads = useCallback(async () => {
+    const [activeRes, snoozedRes] = await Promise.all([
+      fetch('/api/leads?status=active'),
+      fetch('/api/leads?status=snoozed'),
+    ]);
+    const [activeData, snoozedData] = await Promise.all([activeRes.json(), snoozedRes.json()]);
+    const fetchedLeads = Array.isArray(activeData) ? activeData : [];
+    setLeads(fetchedLeads);
+    setSnoozedCount(Array.isArray(snoozedData) ? snoozedData.length : 0);
 
-  // Fetch all leads on mount and when stage changes
-  const fetchLeads = useCallback(async () => {
-    try {
-      // Fetch all stages in parallel for counts
-      const responses = await Promise.all(
-        STAGE_NAV_ORDER.map((stage) =>
-          fetch(`/api/leads?stage=${stage}`).then((r) => r.json())
-        )
-      );
+    if (!selectedLeadId && fetchedLeads.length > 0) {
+      setSelectedLeadId(fetchedLeads[0].id);
+    } else if (selectedLeadId && !fetchedLeads.some((lead: Lead) => lead.id === selectedLeadId)) {
+      setSelectedLeadId(fetchedLeads[0]?.id || null);
+    }
+  }, [selectedLeadId]);
 
-      const allFetchedLeads: Lead[] = [];
-      const seenIds = new Set<string>();
-
-      responses.forEach((data) => {
-        if (Array.isArray(data)) {
-          data.forEach((lead: Lead) => {
-            if (!seenIds.has(lead.id)) {
-              seenIds.add(lead.id);
-              allFetchedLeads.push(lead);
-            }
-          });
-        }
-      });
-
-      setAllLeads(allFetchedLeads);
-    } catch (error) {
-      console.error('Error fetching leads:', error);
-    } finally {
-      setLoading(false);
+  const loadActivities = useCallback(async (leadId: string) => {
+    const response = await fetch(`/api/activities?lead_id=${leadId}`);
+    const data = await response.json();
+    if (Array.isArray(data)) {
+      setActivitiesByLead((prev) => ({ ...prev, [leadId]: data }));
     }
   }, []);
 
   useEffect(() => {
-    fetchLeads();
-  }, [fetchLeads]);
+    (async () => {
+      try {
+        await loadLeads();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [loadLeads]);
 
   useEffect(() => {
-    const fetchSenderProfiles = async () => {
-      try {
-        const response = await fetch('/api/getsales/sender-profiles');
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          setSenderProfiles(data);
-        }
-      } catch (error) {
-        console.error('Error fetching sender profiles:', error);
+    if (!selectedLeadId) return;
+    loadActivities(selectedLeadId);
+  }, [selectedLeadId, loadActivities]);
+
+  useEffect(() => {
+    timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' });
+  }, [selectedLeadId, selectedActivities.length]);
+
+  useEffect(() => {
+    const onMove = (event: MouseEvent) => {
+      if (!dragging || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      if (dragging === 'left') {
+        const w = Math.min(Math.max(event.clientX - rect.left, 200), 500);
+        setLeftWidth(w);
+      } else {
+        const w = Math.min(Math.max(rect.right - event.clientX, 200), 450);
+        setRightWidth(w);
       }
     };
-    fetchSenderProfiles();
-  }, []);
+    const onUp = () => setDragging(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
 
-  const [syncing, setSyncing] = useState(false);
+  const queueLeads = useMemo(() => {
+    const activeLeads = leads.filter((lead) => !doneIds.has(lead.id));
+    const doneLeads = leads.filter((lead) => doneIds.has(lead.id));
+    if (tab === 'done') return doneLeads;
+    if (tab === 'replies') return activeLeads.filter((lead) => Boolean(lead.has_unread));
+    return [...activeLeads, ...doneLeads];
+  }, [leads, doneIds, tab]);
 
-  // Sync conversations from GetSales.io then fetch messages
-  const syncAndFetchMessages = useCallback(async (leadId: string) => {
-    setSyncing(true);
-    try {
-      // Sync from GetSales.io API (pulls LinkedIn + email conversations)
-      await fetch(`/api/leads/sync?lead_id=${leadId}`, { method: 'POST' });
-    } catch (error) {
-      console.error('Error syncing from GetSales:', error);
+  const needsReplyCount = useMemo(
+    () => leads.filter((lead) => Boolean(lead.has_unread) && !doneIds.has(lead.id)).length,
+    [leads, doneIds]
+  );
+
+  const selectLead = async (lead: Lead) => {
+    setSelectedLeadId(lead.id);
+    setComposeChannel('email');
+    setComposeText('');
+    setShowSnoozeBar(false);
+    if (lead.has_unread) {
+      await fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: lead.id, has_unread: false }),
+      });
+      setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, has_unread: false } : item)));
     }
-    // Always fetch messages regardless of sync result
+  };
+
+  const refreshQueue = async () => {
+    setRefreshing(true);
     try {
-      const response = await fetch(`/api/messages?lead_id=${leadId}`);
-      const data = await response.json();
-      if (Array.isArray(data)) {
-        setMessages((prev) => ({ ...prev, [leadId]: data }));
-      }
-    } catch (error) {
-      console.error('Error fetching messages:', error);
+      await loadLeads();
     } finally {
-      setSyncing(false);
+      setRefreshing(false);
     }
-  }, []);
+  };
 
-  // Fetch messages only (without sync — for when we add notes locally)
-  const fetchMessages = useCallback(async (leadId: string) => {
-    try {
-      const response = await fetch(`/api/messages?lead_id=${leadId}`);
-      const data = await response.json();
-      if (Array.isArray(data)) {
-        setMessages((prev) => ({ ...prev, [leadId]: data }));
+  const completeTask = () => {
+    if (!selectedLeadId) return;
+    setDoneIds((prev) => new Set([...prev, selectedLeadId]));
+    setShowSnoozeBar(true);
+    setComposeText('');
+    setCallNotes('');
+  };
+
+  const sendCompose = async () => {
+    if (!selectedLead || !selectedLeadId) return;
+
+    if (composeChannel === 'call') return;
+    if (!composeText.trim()) return;
+
+    if (composeChannel === 'email' || composeChannel === 'linkedin') {
+      const senderProfilesRes = await fetch('/api/getsales/sender-profiles');
+      const senderProfiles = await senderProfilesRes.json();
+      const senderProfileUuid = Array.isArray(senderProfiles) ? senderProfiles[0]?.uuid : null;
+      if (!senderProfileUuid) {
+        alert('No sender profile available for sending.');
+        return;
       }
-    } catch (error) {
-      console.error('Error fetching messages:', error);
-    }
-  }, []);
 
-  useEffect(() => {
-    if (activeLeadId) {
-      syncAndFetchMessages(activeLeadId);
-    }
-  }, [activeLeadId, syncAndFetchMessages]);
-
-  // Compute stage counts
-  const stageCounts = STAGE_NAV_ORDER.reduce((acc, stage) => {
-    if (stage === 'lead_feed') {
-      acc[stage] = allLeads.filter(
-        (l) =>
-          l.stage === 'lead_feed' ||
-          (l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) <= new Date())
-      ).length;
-    } else {
-      acc[stage] = allLeads.filter(
-        (l) => l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) > new Date()
-      ).length;
-    }
-    return acc;
-  }, {} as Record<LeadStage, number>);
-
-  // Get filtered leads for current stage view
-  const getFilteredLeads = (): Lead[] => {
-    let filtered: Lead[];
-    if (activeStage === 'lead_feed') {
-      filtered = allLeads.filter(
-        (l) =>
-          l.stage === 'lead_feed' ||
-          (l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) <= new Date())
-      );
-      filtered.sort((a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime());
-    } else if (activeStage === 'snoozed') {
-      filtered = allLeads.filter(
-        (l) => l.stage === 'snoozed' && l.snoozed_until && new Date(l.snoozed_until) > new Date()
-      );
-      filtered.sort((a, b) => new Date(a.snoozed_until!).getTime() - new Date(b.snoozed_until!).getTime());
-    } else {
-      filtered = allLeads.filter((l) => l.stage === activeStage);
-      filtered.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-    }
-    return filtered;
-  };
-
-  const activeLead = allLeads.find((l) => l.id === activeLeadId) || null;
-  const activeMessages = activeLeadId ? messages[activeLeadId] || [] : [];
-
-  // Handle stage change from nav
-  const handleStageNavChange = (stage: LeadStage) => {
-    setActiveStage(stage);
-    setActiveLeadId(null);
-  };
-
-  // Handle lead selection
-  const handleLeadSelect = (leadId: string) => {
-    setActiveLeadId(leadId);
-  };
-
-  // Handle manual refresh of conversations
-  const handleRefreshConversation = () => {
-    if (activeLeadId) {
-      syncAndFetchMessages(activeLeadId);
-      showToast('Syncing conversations...');
-    }
-  };
-
-  // Handle adding a note
-  const handleSendNote = async (content: string) => {
-    if (!activeLeadId) return;
-
-    const response = await fetch('/api/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        lead_id: activeLeadId,
-        content,
-        is_note: true,
-        channel: 'linkedin',
-        direction: 'outbound',
-      }),
-    });
-
-    const newMessage = await response.json();
-    if (!response.ok) {
-      throw new Error(newMessage.error || 'Failed to add note');
-    }
-    if (newMessage.id) {
-      setMessages((prev) => ({
-        ...prev,
-        [activeLeadId]: [...(prev[activeLeadId] || []), newMessage],
-      }));
-      showToast('Note added');
-      fetchLeads();
-    }
-  };
-
-  const handleSendReply = async ({
-    channel,
-    senderProfileUuid,
-    content,
-    subject,
-    fromName,
-    fromEmail,
-  }: {
-    channel: 'linkedin' | 'email';
-    senderProfileUuid: string;
-    content: string;
-    subject?: string;
-    fromName?: string;
-    fromEmail?: string;
-  }) => {
-    if (!activeLeadId) return;
-
-    const response = await fetch('/api/messages/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        lead_id: activeLeadId,
-        channel,
-        sender_profile_uuid: senderProfileUuid,
-        content,
-        subject,
-        from_name: fromName,
-        from_email: fromEmail,
-      }),
-    });
-
-    const newMessage = await response.json();
-    if (!response.ok) {
-      throw new Error(newMessage.error || newMessage.message || 'Failed to send reply');
-    }
-    if (newMessage.id) {
-      setMessages((prev) => ({
-        ...prev,
-        [activeLeadId]: [...(prev[activeLeadId] || []), newMessage],
-      }));
-      showToast(channel === 'linkedin' ? 'LinkedIn message sent' : 'Email sent');
-      fetchLeads();
-    }
-  };
-
-  // Handle stage change
-  const handleStageChange = async (leadId: string, stage: LeadStage) => {
-    try {
-      const response = await fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId, stage }),
-      });
-
-      const updatedLead = await response.json();
-      if (updatedLead.id) {
-        setAllLeads((prev) =>
-          prev.map((l) => (l.id === leadId ? updatedLead : l))
-        );
-        showToast(`Stage changed to ${stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`);
-
-        // Add system note
-        await fetch('/api/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lead_id: leadId,
-            content: `Stage changed to ${stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
-            is_note: true,
-            channel: 'linkedin',
-            direction: 'outbound',
-          }),
-        });
-
-        if (activeLeadId === leadId) {
-          fetchMessages(leadId);
-        }
-      }
-    } catch (error) {
-      console.error('Error changing stage:', error);
-    }
-  };
-
-  // Handle snooze
-  const handleSnooze = async (leadId: string, until: Date) => {
-    try {
-      const response = await fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: leadId,
-          stage: 'snoozed',
-          snoozed_until: until.toISOString(),
-        }),
-      });
-
-      const updatedLead = await response.json();
-      if (updatedLead.id) {
-        setAllLeads((prev) =>
-          prev.map((l) => (l.id === leadId ? updatedLead : l))
-        );
-
-        const diffDays = Math.ceil((until.getTime() - Date.now()) / 86400000);
-        const label = diffDays === 1 ? '1 day' : diffDays === 7 ? '1 week' : `${diffDays} days`;
-        showToast(`Snoozed for ${label}`);
-
-        // Add system note
-        await fetch('/api/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lead_id: leadId,
-            content: `Snoozed until ${until.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${until.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
-            is_note: true,
-            channel: 'linkedin',
-            direction: 'outbound',
-          }),
-        });
-
-        if (activeLeadId === leadId) {
-          fetchMessages(leadId);
-        }
-      }
-    } catch (error) {
-      console.error('Error snoozing lead:', error);
-    }
-  };
-
-  // Handle unsnooze
-  const handleUnsnooze = async (leadId: string) => {
-    try {
-      const response = await fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: leadId,
-          stage: 'lead_feed',
-          snoozed_until: null,
-        }),
-      });
-
-      const updatedLead = await response.json();
-      if (updatedLead.id) {
-        setAllLeads((prev) =>
-          prev.map((l) => (l.id === leadId ? updatedLead : l))
-        );
-        showToast('Lead unsnoozed');
-      }
-    } catch (error) {
-      console.error('Error unsnoozing lead:', error);
-    }
-  };
-
-  // Handle phone numbers update
-  const handlePhoneNumbersUpdate = async (leadId: string, phoneNumbers: string[]) => {
-    try {
-      const response = await fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId, phone_numbers: phoneNumbers }),
-      });
-
-      const updatedLead = await response.json();
-      if (updatedLead.id) {
-        setAllLeads((prev) =>
-          prev.map((lead) => (lead.id === leadId ? updatedLead : lead))
-        );
-        showToast('Phone numbers updated');
-      }
-    } catch (error) {
-      console.error('Error updating phone numbers:', error);
-    }
-  };
-
-  const handlePhoneEnrich = async (leadId: string) => {
-    try {
-      const response = await fetch('/api/leads/enrich-phone', {
+      await fetch('/api/messages/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId }),
+        body: JSON.stringify({
+          lead_id: selectedLeadId,
+          channel: composeChannel,
+          sender_profile_uuid: senderProfileUuid,
+          content: composeText.trim(),
+          subject: composeChannel === 'email' ? 'Quick follow-up' : undefined,
+        }),
       });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to enrich phone numbers');
-      }
-
-      if (payload?.lead?.id) {
-        setAllLeads((prev) =>
-          prev.map((lead) => (lead.id === leadId ? payload.lead : lead))
-        );
-        if (payload.queued && payload.added === 0) {
-          showToast('Enrichment requested. Apollo will update phones shortly.');
-        } else if (payload.added > 0) {
-          showToast(`Added ${payload.added} phone number${payload.added === 1 ? '' : 's'}`);
-        } else {
-          showToast('No new phone numbers found');
-        }
-      }
-    } catch (error) {
-      console.error('Error enriching phone numbers:', error);
-      showToast(error instanceof Error ? error.message : 'Phone enrichment failed');
+    } else {
+      const type = composeChannel === 'text' ? 'text_sent' : 'note';
+      await fetch('/api/activities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead_id: selectedLeadId,
+          type,
+          content: composeText.trim(),
+        }),
+      });
     }
+
+    await Promise.all([loadActivities(selectedLeadId), loadLeads()]);
+    completeTask();
   };
 
-  const handleUseAiDraft = useCallback((draft: {
-    channel: 'linkedin' | 'email';
-    subject?: string;
-    content: string;
-  }) => {
-    setComposerDraft(draft);
-    setComposerDraftVersion((prev) => prev + 1);
-    showToast('Draft inserted into composer');
-  }, [showToast]);
+  const logCall = async (outcome: string) => {
+    if (!selectedLeadId) return;
+    await fetch('/api/activities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lead_id: selectedLeadId,
+        type: 'call',
+        content: `${outcome}${callNotes ? `\n\n${callNotes}` : ''}`,
+        metadata: { outcome },
+      }),
+    });
+    await Promise.all([loadActivities(selectedLeadId), loadLeads()]);
+    completeTask();
+  };
+
+  const snoozeLead = async (days: number) => {
+    if (!selectedLeadId) return;
+    await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: selectedLeadId,
+        status: 'snoozed',
+        snooze_until: addDays(days),
+      }),
+    });
+    const next = leads.find((lead) => lead.id !== selectedLeadId && !doneIds.has(lead.id));
+    setShowSnoozeBar(false);
+    await loadLeads();
+    if (next) setSelectedLeadId(next.id);
+  };
+
+  const archiveLead = async () => {
+    if (!selectedLeadId) return;
+    await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: selectedLeadId,
+        status: 'archived',
+      }),
+    });
+    await loadLeads();
+  };
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center mx-auto mb-3 animate-pulse">
-            <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-            </svg>
-          </div>
-          <p className="text-sm text-gray-500">Loading Outbounder AI...</p>
-        </div>
+      <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-500">
+        Loading Daily Lead Feed...
       </div>
     );
   }
 
-  const filteredLeads = getFilteredLeads();
-
   return (
-    <div className="h-screen flex overflow-hidden">
-      <Sidebar
-        leads={filteredLeads}
-        messages={messages}
-        activeStage={activeStage}
-        activeLeadId={activeLeadId}
-        stageCounts={stageCounts}
-        onStageChange={handleStageNavChange}
-        onLeadSelect={handleLeadSelect}
-      />
-      <ConversationPanel
-        lead={activeLead}
-        messages={activeMessages}
-        senderProfiles={senderProfiles}
-        onSendNote={handleSendNote}
-        onSendReply={handleSendReply}
-        syncing={syncing}
-        onRefresh={handleRefreshConversation}
-        draft={composerDraft}
-        draftVersion={composerDraftVersion}
-        onDraftApplied={() => setComposerDraft(null)}
-      />
-      <DetailPanel
-        lead={activeLead}
-        onStageChange={handleStageChange}
-        onSnooze={handleSnooze}
-        onUnsnooze={handleUnsnooze}
-        onPhoneNumbersUpdate={handlePhoneNumbersUpdate}
-        onPhoneEnrich={handlePhoneEnrich}
-      />
-      <ResizableRightPanel>
-        <AiPanelErrorBoundary>
-          <AiAssistantPanel
-            allLeads={allLeads}
-            visibleLeads={filteredLeads}
-            activeLead={activeLead}
-            activeMessages={activeMessages}
-            activeStage={activeStage}
-            onUseDraft={handleUseAiDraft}
-          />
-        </AiPanelErrorBoundary>
-      </ResizableRightPanel>
-      <Toast
-        message={toast.message}
-        isVisible={toast.visible}
-        onClose={hideToast}
-      />
+    <div className="h-screen flex flex-col bg-slate-50">
+      <div className="bg-white border-b border-slate-200 px-5 py-3 shrink-0">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-900">Daily Lead Feed</h1>
+            <p className="text-xs text-slate-500">
+              {new Date().toLocaleDateString()} · Prioritized at {new Date().toLocaleTimeString()}
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-slate-700"><strong>{leads.length}</strong> Tasks</span>
+            <span className="text-indigo-600"><strong>{needsReplyCount}</strong> Needs Reply</span>
+            <span className="text-emerald-600"><strong>{doneIds.size}</strong> Done</span>
+            <span className="text-slate-500"><strong>{snoozedCount}</strong> Snoozed</span>
+            <button
+              onClick={refreshQueue}
+              className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div ref={containerRef} className="flex-1 flex min-h-0">
+        <div className="bg-white border-r border-slate-200 flex flex-col min-h-0" style={{ width: leftWidth }}>
+          <div className="px-3 py-2 border-b border-slate-100 flex gap-2">
+            {(['all', 'replies', 'done'] as const).map((item) => (
+              <button
+                key={item}
+                onClick={() => setTab(item)}
+                className={`px-2.5 py-1 text-xs rounded-md ${
+                  tab === item ? 'bg-slate-100 text-slate-800 font-medium' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                {item === 'all' ? 'All' : item === 'replies' ? 'Replies' : 'Done'}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {queueLeads.map((lead) => {
+              const selected = lead.id === selectedLeadId;
+              const done = doneIds.has(lead.id);
+              return (
+                <button
+                  key={lead.id}
+                  onClick={() => selectLead(lead)}
+                  className={`w-full text-left p-3 border-b border-slate-100 ${
+                    selected ? 'bg-slate-50 border-l-2 border-l-slate-800' : ''
+                  } ${done ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex justify-between gap-2 items-start">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-slate-900 truncate">{fullName(lead)}</span>
+                        {lead.has_unread && !done && <span className="w-2 h-2 rounded-full bg-indigo-500" />}
+                      </div>
+                      <p className="text-xs text-slate-500 truncate">
+                        {lead.title || 'Unknown title'} · {lead.company || 'Unknown company'}
+                      </p>
+                      <p className="text-xs text-slate-400 truncate mt-1">
+                        ✦ {lead.has_unread ? 'Respond to reply' : 'Follow up'}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-[11px] text-slate-500">{STAGE_LABELS[lead.deal_stage || 'lead'] || 'Lead'}</p>
+                      <p className="text-[11px] text-slate-400">{fmtRelative(lead.last_activity_at || lead.last_activity)}</p>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div
+          onMouseDown={() => setDragging('left')}
+          className="w-1 cursor-col-resize bg-transparent hover:bg-slate-300 transition-colors"
+        />
+
+        <div className="flex-1 min-w-0 flex flex-col bg-slate-50">
+          {selectedLead ? (
+            <>
+              <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">{fullName(selectedLead)}</h2>
+                  <p className="text-xs text-slate-500">{selectedLead.title || 'Unknown title'} at {selectedLead.company || 'Unknown company'}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowSnoozeBar(true)}
+                    className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+                  >
+                    Snooze
+                  </button>
+                  <button
+                    onClick={archiveLead}
+                    className="px-3 py-1.5 text-xs rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
+                  >
+                    Archive
+                  </button>
+                </div>
+              </div>
+
+              <div ref={timelineRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                {selectedActivities.map((activity) => (
+                  <div
+                    key={activity.id}
+                    className={`flex ${activity.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div className="max-w-[80%]">
+                      <p className="text-[11px] text-slate-400 mb-1">
+                        {eventLabel(activity)} · {fmtRelative(activity.created_at)}
+                      </p>
+                      <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${bubbleClass(activity)}`}>
+                        {activity.content}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {showSnoozeBar && (
+                <div className="px-4 py-2 bg-emerald-50 border-t border-emerald-200 flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-emerald-700 font-medium">Done! Snooze:</span>
+                  {SNOOZE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.label}
+                      onClick={() => snoozeLead(opt.days)}
+                      className="px-2 py-1 text-xs rounded border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-100"
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="bg-white border-t border-slate-200">
+                <div className="flex border-b border-slate-100">
+                  {(['email', 'call', 'linkedin', 'text', 'note'] as ComposeChannel[]).map((channel) => (
+                    <button
+                      key={channel}
+                      onClick={() => setComposeChannel(channel)}
+                      className={`px-3 py-2 text-xs ${
+                        composeChannel === channel
+                          ? 'text-slate-900 border-b-2 border-slate-900 font-medium'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {channel[0].toUpperCase() + channel.slice(1)}
+                    </button>
+                  ))}
+                </div>
+
+                {composeChannel === 'call' ? (
+                  <div className="p-3 space-y-3">
+                    <div className="flex gap-2 flex-wrap">
+                      {['Connected', 'Voicemail', 'No Answer', 'Meeting Booked'].map((outcome) => (
+                        <button
+                          key={outcome}
+                          onClick={() => logCall(outcome)}
+                          className="px-3 py-1.5 text-xs border border-slate-300 rounded-md text-slate-700 hover:bg-slate-50"
+                        >
+                          {outcome}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      value={callNotes}
+                      onChange={(event) => setCallNotes(event.target.value)}
+                      placeholder="Call notes..."
+                      className="w-full min-h-20 p-2 text-sm border border-slate-200 rounded-md"
+                    />
+                  </div>
+                ) : (
+                  <div className="p-3">
+                    <textarea
+                      value={composeText}
+                      onChange={(event) => setComposeText(event.target.value)}
+                      placeholder={composeChannel === 'note' ? 'Add note...' : `Write ${composeChannel} message...`}
+                      className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        onClick={sendCompose}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                      >
+                        {composeChannel === 'note' ? 'Save Note' : composeChannel === 'text' ? 'Log Text' : 'Send'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-slate-400">Select a lead</div>
+          )}
+        </div>
+
+        <div
+          onMouseDown={() => setDragging('right')}
+          className="w-1 cursor-col-resize bg-transparent hover:bg-slate-300 transition-colors"
+        />
+
+        <div className="bg-white border-l border-slate-200 overflow-y-auto" style={{ width: rightWidth }}>
+          {selectedLead && (
+            <div className="p-4">
+              <div className="text-center border-b border-slate-100 pb-4">
+                <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-semibold">
+                  {(selectedLead.first_name?.[0] || '') + (selectedLead.last_name?.[0] || '')}
+                </div>
+                <h3 className="mt-2 text-sm font-semibold text-slate-900">{fullName(selectedLead)}</h3>
+                <p className="text-xs text-slate-500">{selectedLead.title || 'Unknown title'}</p>
+                <p className="text-xs text-slate-400">{selectedLead.company || 'Unknown company'}</p>
+              </div>
+
+              <div className="py-4 border-b border-slate-100 space-y-3">
+                <h4 className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Contact</h4>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">EMAIL</p>
+                  <p>{selectedLead.email || '—'}</p>
+                </div>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">PHONE</p>
+                  <p>{selectedLead.phone || '—'}</p>
+                </div>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">LINKEDIN</p>
+                  <p className="break-all">{selectedLead.linkedin_url || '—'}</p>
+                </div>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">LOCATION</p>
+                  <p>{selectedLead.location || '—'}</p>
+                </div>
+              </div>
+
+              <div className="py-4 border-b border-slate-100 space-y-2">
+                <h4 className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Details</h4>
+                <p className="text-xs text-slate-600"><span className="text-slate-400">SOURCE:</span> {selectedLead.lead_source || selectedLead.source || '—'}</p>
+                <p className="text-xs text-slate-600"><span className="text-slate-400">LEAD DATE:</span> {fmtRelative(selectedLead.created_at)}</p>
+                <p className="text-xs text-slate-600"><span className="text-slate-400">LAST TOUCH:</span> {fmtRelative(selectedLead.last_activity_at || selectedLead.last_activity)}</p>
+                <p className="text-xs text-slate-600"><span className="text-slate-400">DEAL STAGE:</span> {STAGE_LABELS[selectedLead.deal_stage || 'lead'] || 'Lead'}</p>
+              </div>
+
+              <div className="py-4">
+                <h4 className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold mb-2">Notes</h4>
+                <p className="text-xs text-slate-600 whitespace-pre-wrap">{selectedLead.notes || 'No notes yet.'}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
