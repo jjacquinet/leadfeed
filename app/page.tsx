@@ -5,7 +5,7 @@ import { Activity, Lead } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
 import { cleanEmailReplyContent } from '@/lib/utils';
 
-type FeedTab = 'all' | 'replies' | 'done';
+type FeedTab = 'all' | 'replies' | 'done' | 'snoozed';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -89,8 +89,39 @@ function getDisplayContent(activity: Activity): string {
   return activity.content;
 }
 
+function formatResurfaceLabel(iso?: string | null): string {
+  if (!iso) return 'Resurface date not set';
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return 'Resurface date unknown';
+
+  const today = new Date();
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((startTarget.getTime() - startToday.getTime()) / 86400000);
+
+  if (diffDays === 0) return 'Resurfaces today';
+  if (diffDays === 1) return 'Resurfaces tomorrow';
+
+  const sameYear = date.getFullYear() === today.getFullYear();
+  const formatted = date.toLocaleDateString('en-US', sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+  return `Resurfaces ${formatted}`;
+}
+
+function getMostRecentNote(activities: Activity[]): string | null {
+  for (let i = activities.length - 1; i >= 0; i -= 1) {
+    const activity = activities[i];
+    if (activity.type === 'note' || activity.channel === 'note') {
+      return activity.content?.trim() || null;
+    }
+  }
+  return null;
+}
+
 export default function HomePage() {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [snoozedLeads, setSnoozedLeads] = useState<Lead[]>([]);
   const [activitiesByLead, setActivitiesByLead] = useState<Record<string, Activity[]>>({});
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [tab, setTab] = useState<FeedTab>('all');
@@ -124,8 +155,10 @@ export default function HomePage() {
     ]);
     const [activeData, snoozedData] = await Promise.all([activeRes.json(), snoozedRes.json()]);
     const fetchedLeads = Array.isArray(activeData) ? activeData : [];
+    const fetchedSnoozedLeads = Array.isArray(snoozedData) ? snoozedData : [];
     setLeads(fetchedLeads);
-    setSnoozedCount(Array.isArray(snoozedData) ? snoozedData.length : 0);
+    setSnoozedLeads(fetchedSnoozedLeads);
+    setSnoozedCount(fetchedSnoozedLeads.length);
 
     if (!selectedLeadId && fetchedLeads.length > 0) {
       setSelectedLeadId(fetchedLeads[0].id);
@@ -167,6 +200,17 @@ export default function HomePage() {
   }, [selectedLeadId, syncAndLoadActivities]);
 
   useEffect(() => {
+    if (tab !== 'snoozed' || snoozedLeads.length === 0) return;
+    const missingActivityLeadIds = snoozedLeads
+      .map((lead) => lead.id)
+      .filter((leadId) => !activitiesByLead[leadId]);
+    if (missingActivityLeadIds.length === 0) return;
+    Promise.all(missingActivityLeadIds.map((leadId) => loadActivities(leadId))).catch(() => {
+      // Non-blocking enrichment for note previews.
+    });
+  }, [tab, snoozedLeads, activitiesByLead, loadActivities]);
+
+  useEffect(() => {
     timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' });
   }, [selectedLeadId, selectedActivities.length]);
 
@@ -192,12 +236,13 @@ export default function HomePage() {
   }, [dragging]);
 
   const queueLeads = useMemo(() => {
+    if (tab === 'snoozed') return snoozedLeads;
     const activeLeads = leads.filter((lead) => !doneIds.has(lead.id));
     const doneLeads = leads.filter((lead) => doneIds.has(lead.id));
     if (tab === 'done') return doneLeads;
     if (tab === 'replies') return activeLeads.filter((lead) => Boolean(lead.has_unread));
     return [...activeLeads, ...doneLeads];
-  }, [leads, doneIds, tab]);
+  }, [leads, snoozedLeads, doneIds, tab]);
 
   const needsReplyCount = useMemo(
     () => leads.filter((lead) => Boolean(lead.has_unread) && !doneIds.has(lead.id)).length,
@@ -328,6 +373,26 @@ export default function HomePage() {
     await loadLeads();
   };
 
+  const wakeLead = async (leadId: string) => {
+    await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: leadId,
+        status: 'active',
+        snooze_until: null,
+      }),
+    });
+    setDoneIds((prev) => {
+      const next = new Set(prev);
+      next.delete(leadId);
+      return next;
+    });
+    await loadLeads();
+    setTab('all');
+    setSelectedLeadId(leadId);
+  };
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-500">
@@ -364,7 +429,7 @@ export default function HomePage() {
       <div ref={containerRef} className="flex-1 flex min-h-0">
         <div className="bg-white border-r border-slate-200 flex flex-col min-h-0" style={{ width: leftWidth }}>
           <div className="px-3 py-2 border-b border-slate-100 flex gap-2">
-            {(['all', 'replies', 'done'] as const).map((item) => (
+            {(['all', 'replies', 'done', 'snoozed'] as const).map((item) => (
               <button
                 key={item}
                 onClick={() => setTab(item)}
@@ -372,7 +437,13 @@ export default function HomePage() {
                   tab === item ? 'bg-slate-100 text-slate-800 font-medium' : 'text-slate-500 hover:bg-slate-50'
                 }`}
               >
-                {item === 'all' ? 'All' : item === 'replies' ? 'Replies' : 'Done'}
+                {item === 'all'
+                  ? 'All'
+                  : item === 'replies'
+                    ? 'Replies'
+                    : item === 'done'
+                      ? 'Done'
+                      : `Snoozed (${snoozedCount})`}
               </button>
             ))}
           </div>
@@ -380,6 +451,45 @@ export default function HomePage() {
             {queueLeads.map((lead) => {
               const selected = lead.id === selectedLeadId;
               const done = doneIds.has(lead.id);
+              if (tab === 'snoozed') {
+                const leadActivities = activitiesByLead[lead.id] || [];
+                const recentNote = getMostRecentNote(leadActivities);
+                return (
+                  <div
+                    key={lead.id}
+                    className={`w-full text-left p-3 border-b border-slate-100 ${
+                      selected ? 'bg-slate-50 border-l-2 border-l-slate-800' : ''
+                    }`}
+                  >
+                    <div className="flex justify-between gap-2 items-start">
+                      <button
+                        onClick={() => selectLead(lead)}
+                        className="min-w-0 text-left flex-1"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-slate-900 truncate">{fullName(lead)}</span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate">
+                          {lead.title || 'Unknown title'} · {lead.company || 'Unknown company'}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {formatResurfaceLabel(lead.snooze_until || lead.snoozed_until)}
+                        </p>
+                        {recentNote && (
+                          <p className="text-xs text-slate-500 truncate mt-1">Note: {recentNote}</p>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => wakeLead(lead.id)}
+                        className="px-2.5 py-1 text-xs rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 shrink-0"
+                      >
+                        Wake
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <button
                   key={lead.id}
