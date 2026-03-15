@@ -126,6 +126,17 @@ function channelAndType(channel: string, direction: 'inbound' | 'outbound') {
   };
 }
 
+function buildFallbackWebhookNote(rawPayload: any): string {
+  const eventName = deepGet(rawPayload, 'event_name', 'event', 'type') || 'Webhook event';
+  const pipelineStage = deepGet(rawPayload, 'pipeline_stage_name', 'stage', 'status');
+  const listName = deepGet(rawPayload, 'list_name', 'campaign_name', 'campaign');
+
+  const parts = [`GetSales webhook received: ${eventName}`];
+  if (pipelineStage) parts.push(`Stage: ${pipelineStage}`);
+  if (listName) parts.push(`List: ${listName}`);
+  return parts.join(' · ');
+}
+
 /**
  * Parse the request body regardless of content type.
  */
@@ -343,6 +354,28 @@ export async function POST(request: NextRequest) {
           }));
           await supabase.from('messages').insert(legacyMessages);
         }
+      } else {
+        const noteContent = buildFallbackWebhookNote(rawPayload);
+        const noteActivity = {
+          lead_id: newLead.id,
+          type: 'note',
+          channel: 'note',
+          direction: 'internal',
+          content: noteContent,
+          metadata: { source: 'getsales_webhook', generated: true },
+          created_at: now,
+        };
+        const noteInsert = await supabase.from('activities').insert([noteActivity]);
+        if (noteInsert.error) {
+          await supabase.from('messages').insert({
+            lead_id: newLead.id,
+            channel: 'linkedin',
+            direction: 'outbound',
+            content: noteContent,
+            is_note: true,
+            timestamp: now,
+          });
+        }
       }
 
       return NextResponse.json({ success: true, action: 'created', lead_id: newLead.id });
@@ -446,6 +479,28 @@ export async function POST(request: NextRequest) {
           timestamp: event.created_at,
         }));
         await supabase.from('messages').insert(legacyMessages);
+      }
+    } else {
+      const noteContent = buildFallbackWebhookNote(rawPayload);
+      const noteActivity = {
+        lead_id: existingLead.id,
+        type: 'note',
+        channel: 'note',
+        direction: 'internal',
+        content: noteContent,
+        metadata: { source: 'getsales_webhook', generated: true },
+        created_at: now,
+      };
+      const noteInsert = await supabase.from('activities').insert([noteActivity]);
+      if (noteInsert.error) {
+        await supabase.from('messages').insert({
+          lead_id: existingLead.id,
+          channel: 'linkedin',
+          direction: 'outbound',
+          content: noteContent,
+          is_note: true,
+          timestamp: now,
+        });
       }
     }
 
