@@ -7,6 +7,7 @@ type QueueLead = {
   has_unread: boolean | null;
   last_inbound_at: string | null;
   last_activity_at: string | null;
+  closed_at: string | null;
   updated_at: string;
 };
 
@@ -63,8 +64,8 @@ export async function GET(request: NextRequest) {
       query = query.or('status.eq.active,stage.eq.lead_feed');
     } else if (status === 'snoozed') {
       query = query.or('status.eq.snoozed,stage.eq.snoozed').gt('snooze_until', now);
-    } else if (status === 'archived') {
-      query = query.eq('status', 'archived');
+    } else if (status === 'closed') {
+      query = query.eq('status', 'closed');
     }
 
     let { data, error } = await query;
@@ -81,6 +82,8 @@ export async function GET(request: NextRequest) {
         );
       } else if (status === 'snoozed' || stage === 'snoozed') {
         legacy = legacy.eq('stage', 'snoozed').gt('snoozed_until', now);
+      } else if (status === 'closed') {
+        legacy = legacy.eq('status', 'archived');
       }
       const legacyResult = await legacy;
       data = legacyResult.data;
@@ -104,6 +107,13 @@ export async function GET(request: NextRequest) {
         const aAt = a.snooze_until ? new Date(a.snooze_until).getTime() : Number.MAX_SAFE_INTEGER;
         const bAt = b.snooze_until ? new Date(b.snooze_until).getTime() : Number.MAX_SAFE_INTEGER;
         return aAt - bAt;
+      });
+    } else if (status === 'closed') {
+      leads.sort((a, b) => {
+        const aClosed = a.closed_at ? new Date(a.closed_at).getTime() : 0;
+        const bClosed = b.closed_at ? new Date(b.closed_at).getTime() : 0;
+        if (aClosed !== bClosed) return bClosed - aClosed;
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
     } else {
       leads.sort(
@@ -158,9 +168,11 @@ export async function PATCH(request: NextRequest) {
 
     if (updates.status === 'active') {
       updates.stage = 'lead_feed';
+      updates.closed_at = null;
     }
-    if (updates.status === 'archived') {
+    if (updates.status === 'closed') {
       updates.stage = 'snoozed';
+      updates.closed_at = now;
     }
 
     if (updates.has_unread === false && !Object.prototype.hasOwnProperty.call(updates, 'last_inbound_at')) {

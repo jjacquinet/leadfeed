@@ -1,4 +1,4 @@
-export type LeadStatus = 'active' | 'snoozed' | 'archived';
+export type LeadStatus = 'active' | 'snoozed' | 'closed';
 export type DealStage = 'lead' | 'conversation' | 'demo_scheduled' | 'proposal_sent' | 'contract_sent';
 
 // Legacy stage values kept for compatibility with older components/routes.
@@ -37,6 +37,7 @@ export interface Lead {
   lead_source?: string | null;
   status?: LeadStatus | null;
   snooze_until?: string | null;
+  closed_at?: string | null;
   has_unread?: boolean;
   last_inbound_at?: string | null;
   last_activity_at?: string | null;

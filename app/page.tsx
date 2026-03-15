@@ -5,7 +5,7 @@ import { Activity, Lead } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
 import { cleanEmailReplyContent } from '@/lib/utils';
 
-type FeedTab = 'all' | 'replies' | 'done' | 'snoozed';
+type FeedTab = 'today' | 'snoozed' | 'closed';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -109,6 +109,13 @@ function formatResurfaceLabel(iso?: string | null): string {
   return `Resurfaces ${formatted}`;
 }
 
+function formatClosedDate(iso?: string | null): string {
+  if (!iso) return 'Closed date unknown';
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return 'Closed date unknown';
+  return `Closed ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -122,15 +129,17 @@ function getMostRecentNote(activities: Activity[]): string | null {
 export default function HomePage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [snoozedLeads, setSnoozedLeads] = useState<Lead[]>([]);
+  const [closedLeads, setClosedLeads] = useState<Lead[]>([]);
   const [activitiesByLead, setActivitiesByLead] = useState<Record<string, Activity[]>>({});
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [tab, setTab] = useState<FeedTab>('all');
+  const [tab, setTab] = useState<FeedTab>('today');
   const [composeChannel, setComposeChannel] = useState<ComposeChannel>('email');
   const [composeText, setComposeText] = useState('');
   const [callNotes, setCallNotes] = useState('');
-  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [showSnoozeBar, setShowSnoozeBar] = useState(false);
   const [snoozedCount, setSnoozedCount] = useState(0);
+  const [closedCount, setClosedCount] = useState(0);
+  const [showCloseModal, setShowCloseModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [leftWidth, setLeftWidth] = useState(300);
@@ -139,31 +148,50 @@ export default function HomePage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
+  const allLeads = useMemo(() => {
+    const map = new Map<string, Lead>();
+    [...leads, ...snoozedLeads, ...closedLeads].forEach((lead) => {
+      map.set(lead.id, lead);
+    });
+    return Array.from(map.values());
+  }, [leads, snoozedLeads, closedLeads]);
+
   const selectedLead = useMemo(
-    () => leads.find((lead) => lead.id === selectedLeadId) ?? null,
-    [leads, selectedLeadId]
+    () => allLeads.find((lead) => lead.id === selectedLeadId) ?? null,
+    [allLeads, selectedLeadId]
   );
+  const selectedLeadStatus = selectedLead?.status as string | undefined;
+  const selectedLeadClosed = selectedLeadStatus === 'closed' || selectedLeadStatus === 'archived';
   const selectedActivities = useMemo(() => {
     const activities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
     return activities.filter((activity) => !isRawWebhookPayload(activity.content));
   }, [selectedLeadId, activitiesByLead]);
 
   const loadLeads = useCallback(async () => {
-    const [activeRes, snoozedRes] = await Promise.all([
+    const [activeRes, snoozedRes, closedRes] = await Promise.all([
       fetch('/api/leads?status=active'),
       fetch('/api/leads?status=snoozed'),
+      fetch('/api/leads?status=closed'),
     ]);
-    const [activeData, snoozedData] = await Promise.all([activeRes.json(), snoozedRes.json()]);
+    const [activeData, snoozedData, closedData] = await Promise.all([
+      activeRes.json(),
+      snoozedRes.json(),
+      closedRes.json(),
+    ]);
     const fetchedLeads = Array.isArray(activeData) ? activeData : [];
     const fetchedSnoozedLeads = Array.isArray(snoozedData) ? snoozedData : [];
+    const fetchedClosedLeads = Array.isArray(closedData) ? closedData : [];
     setLeads(fetchedLeads);
     setSnoozedLeads(fetchedSnoozedLeads);
+    setClosedLeads(fetchedClosedLeads);
     setSnoozedCount(fetchedSnoozedLeads.length);
+    setClosedCount(fetchedClosedLeads.length);
 
+    const allFetched = [...fetchedLeads, ...fetchedSnoozedLeads, ...fetchedClosedLeads];
     if (!selectedLeadId && fetchedLeads.length > 0) {
       setSelectedLeadId(fetchedLeads[0].id);
-    } else if (selectedLeadId && !fetchedLeads.some((lead: Lead) => lead.id === selectedLeadId)) {
-      setSelectedLeadId(fetchedLeads[0]?.id || null);
+    } else if (selectedLeadId && !allFetched.some((lead: Lead) => lead.id === selectedLeadId)) {
+      setSelectedLeadId(fetchedLeads[0]?.id || allFetched[0]?.id || null);
     }
   }, [selectedLeadId]);
 
@@ -200,15 +228,16 @@ export default function HomePage() {
   }, [selectedLeadId, syncAndLoadActivities]);
 
   useEffect(() => {
-    if (tab !== 'snoozed' || snoozedLeads.length === 0) return;
-    const missingActivityLeadIds = snoozedLeads
+    const enrichLeads = tab === 'snoozed' ? snoozedLeads : tab === 'closed' ? closedLeads : [];
+    if (enrichLeads.length === 0) return;
+    const missingActivityLeadIds = enrichLeads
       .map((lead) => lead.id)
       .filter((leadId) => !activitiesByLead[leadId]);
     if (missingActivityLeadIds.length === 0) return;
     Promise.all(missingActivityLeadIds.map((leadId) => loadActivities(leadId))).catch(() => {
       // Non-blocking enrichment for note previews.
     });
-  }, [tab, snoozedLeads, activitiesByLead, loadActivities]);
+  }, [tab, snoozedLeads, closedLeads, activitiesByLead, loadActivities]);
 
   useEffect(() => {
     timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' });
@@ -237,16 +266,13 @@ export default function HomePage() {
 
   const queueLeads = useMemo(() => {
     if (tab === 'snoozed') return snoozedLeads;
-    const activeLeads = leads.filter((lead) => !doneIds.has(lead.id));
-    const doneLeads = leads.filter((lead) => doneIds.has(lead.id));
-    if (tab === 'done') return doneLeads;
-    if (tab === 'replies') return activeLeads.filter((lead) => Boolean(lead.has_unread));
-    return [...activeLeads, ...doneLeads];
-  }, [leads, snoozedLeads, doneIds, tab]);
+    if (tab === 'closed') return closedLeads;
+    return leads;
+  }, [leads, snoozedLeads, closedLeads, tab]);
 
   const needsReplyCount = useMemo(
-    () => leads.filter((lead) => Boolean(lead.has_unread) && !doneIds.has(lead.id)).length,
-    [leads, doneIds]
+    () => leads.filter((lead) => Boolean(lead.has_unread)).length,
+    [leads]
   );
 
   const selectLead = async (lead: Lead) => {
@@ -277,8 +303,6 @@ export default function HomePage() {
   };
 
   const completeTask = () => {
-    if (!selectedLeadId) return;
-    setDoneIds((prev) => new Set([...prev, selectedLeadId]));
     setShowSnoozeBar(true);
     setComposeText('');
     setCallNotes('');
@@ -354,22 +378,23 @@ export default function HomePage() {
         snooze_until: addDays(days),
       }),
     });
-    const next = leads.find((lead) => lead.id !== selectedLeadId && !doneIds.has(lead.id));
+    const next = leads.find((lead) => lead.id !== selectedLeadId);
     setShowSnoozeBar(false);
     await loadLeads();
     if (next) setSelectedLeadId(next.id);
   };
 
-  const archiveLead = async () => {
+  const closeLead = async () => {
     if (!selectedLeadId) return;
     await fetch('/api/leads', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: selectedLeadId,
-        status: 'archived',
+        status: 'closed',
       }),
     });
+    setShowCloseModal(false);
     await loadLeads();
   };
 
@@ -383,13 +408,23 @@ export default function HomePage() {
         snooze_until: null,
       }),
     });
-    setDoneIds((prev) => {
-      const next = new Set(prev);
-      next.delete(leadId);
-      return next;
+    await loadLeads();
+    setTab('today');
+    setSelectedLeadId(leadId);
+  };
+
+  const reopenLead = async (leadId: string) => {
+    await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: leadId,
+        status: 'active',
+        snooze_until: null,
+      }),
     });
     await loadLeads();
-    setTab('all');
+    setTab('today');
     setSelectedLeadId(leadId);
   };
 
@@ -414,7 +449,7 @@ export default function HomePage() {
           <div className="flex items-center gap-4 text-sm">
             <span className="text-slate-700"><strong>{leads.length}</strong> Tasks</span>
             <span className="text-indigo-600"><strong>{needsReplyCount}</strong> Needs Reply</span>
-            <span className="text-emerald-600"><strong>{doneIds.size}</strong> Done</span>
+            <span className="text-rose-600"><strong>{closedCount}</strong> Closed</span>
             <span className="text-slate-500"><strong>{snoozedCount}</strong> Snoozed</span>
             <button
               onClick={refreshQueue}
@@ -429,7 +464,7 @@ export default function HomePage() {
       <div ref={containerRef} className="flex-1 flex min-h-0">
         <div className="bg-white border-r border-slate-200 flex flex-col min-h-0" style={{ width: leftWidth }}>
           <div className="px-3 py-2 border-b border-slate-100 flex gap-2">
-            {(['all', 'replies', 'done', 'snoozed'] as const).map((item) => (
+            {(['today', 'snoozed', 'closed'] as const).map((item) => (
               <button
                 key={item}
                 onClick={() => setTab(item)}
@@ -437,20 +472,17 @@ export default function HomePage() {
                   tab === item ? 'bg-slate-100 text-slate-800 font-medium' : 'text-slate-500 hover:bg-slate-50'
                 }`}
               >
-                {item === 'all'
-                  ? 'All'
-                  : item === 'replies'
-                    ? 'Replies'
-                    : item === 'done'
-                      ? 'Done'
-                      : `Snoozed (${snoozedCount})`}
+                {item === 'today'
+                  ? 'Today'
+                  : item === 'snoozed'
+                    ? `Snoozed (${snoozedCount})`
+                    : `Closed (${closedCount})`}
               </button>
             ))}
           </div>
           <div className="flex-1 overflow-y-auto">
             {queueLeads.map((lead) => {
               const selected = lead.id === selectedLeadId;
-              const done = doneIds.has(lead.id);
               if (tab === 'snoozed') {
                 const leadActivities = activitiesByLead[lead.id] || [];
                 const recentNote = getMostRecentNote(leadActivities);
@@ -489,6 +521,42 @@ export default function HomePage() {
                   </div>
                 );
               }
+              if (tab === 'closed') {
+                return (
+                  <div
+                    key={lead.id}
+                    className={`w-full text-left p-3 border-b border-slate-100 ${
+                      selected ? 'bg-slate-50 border-l-2 border-l-slate-800' : ''
+                    }`}
+                  >
+                    <div className="flex justify-between gap-2 items-start">
+                      <button
+                        onClick={() => selectLead(lead)}
+                        className="min-w-0 text-left flex-1"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-slate-900 truncate">{fullName(lead)}</span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate">
+                          {lead.title || 'Unknown title'} · {lead.company || 'Unknown company'}
+                        </p>
+                        <p className="text-xs text-slate-400 truncate mt-1">
+                          Stage: {STAGE_LABELS[lead.deal_stage || 'lead'] || 'Lead'} · Deal: {lead.deal_size ? `$${Number(lead.deal_size).toLocaleString()}` : '—'}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {formatClosedDate(lead.closed_at || lead.updated_at)}
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => reopenLead(lead.id)}
+                        className="px-2.5 py-1 text-xs rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 shrink-0"
+                      >
+                        Reopen
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
 
               return (
                 <button
@@ -496,13 +564,13 @@ export default function HomePage() {
                   onClick={() => selectLead(lead)}
                   className={`w-full text-left p-3 border-b border-slate-100 ${
                     selected ? 'bg-slate-50 border-l-2 border-l-slate-800' : ''
-                  } ${done ? 'opacity-50' : ''}`}
+                  }`}
                 >
                   <div className="flex justify-between gap-2 items-start">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="text-sm font-medium text-slate-900 truncate">{fullName(lead)}</span>
-                        {lead.has_unread && !done && <span className="w-2 h-2 rounded-full bg-indigo-500" />}
+                        {lead.has_unread && <span className="w-2 h-2 rounded-full bg-indigo-500" />}
                       </div>
                       <p className="text-xs text-slate-500 truncate">
                         {lead.title || 'Unknown title'} · {lead.company || 'Unknown company'}
@@ -536,18 +604,26 @@ export default function HomePage() {
                   <p className="text-xs text-slate-500">{selectedLead.title || 'Unknown title'} at {selectedLead.company || 'Unknown company'}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowSnoozeBar(true)}
-                    className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
-                  >
-                    Snooze
-                  </button>
-                  <button
-                    onClick={archiveLead}
-                    className="px-3 py-1.5 text-xs rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
-                  >
-                    Archive
-                  </button>
+                  {selectedLeadClosed ? (
+                    <span className="px-2.5 py-1 text-xs rounded-md bg-rose-50 text-rose-700 border border-rose-200">
+                      Closed (view only)
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setShowSnoozeBar(true)}
+                        className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+                      >
+                        Snooze
+                      </button>
+                      <button
+                        onClick={() => setShowCloseModal(true)}
+                        className="px-3 py-1.5 text-xs rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
+                      >
+                        Close Lead
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -572,7 +648,7 @@ export default function HomePage() {
 
               {showSnoozeBar && (
                 <div className="px-4 py-2 bg-emerald-50 border-t border-emerald-200 flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-emerald-700 font-medium">Done! Snooze:</span>
+                  <span className="text-sm text-emerald-700 font-medium">Next step: Snooze</span>
                   {SNOOZE_OPTIONS.map((opt) => (
                     <button
                       key={opt.label}
@@ -585,7 +661,8 @@ export default function HomePage() {
                 </div>
               )}
 
-              <div className="bg-white border-t border-slate-200">
+              {!selectedLeadClosed && (
+                <div className="bg-white border-t border-slate-200">
                 <div className="flex border-b border-slate-100">
                   {(['email', 'call', 'linkedin', 'text', 'note'] as ComposeChannel[]).map((channel) => (
                     <button
@@ -640,7 +717,8 @@ export default function HomePage() {
                     </div>
                   </div>
                 )}
-              </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-slate-400">Select a lead</div>
@@ -700,6 +778,33 @@ export default function HomePage() {
           )}
         </div>
       </div>
+      {showCloseModal && selectedLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-xl border border-slate-200">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="text-base font-semibold text-slate-900">Close this lead?</h3>
+              <p className="mt-2 text-sm text-slate-600">
+                This will remove [{fullName(selectedLead)}] from your active feed permanently. Their full history will be
+                saved but they will no longer receive follow-ups or appear in your queue.
+              </p>
+            </div>
+            <div className="px-5 py-3 flex justify-end gap-2">
+              <button
+                onClick={() => setShowCloseModal(false)}
+                className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={closeLead}
+                className="px-3 py-1.5 text-xs rounded-md border border-rose-200 bg-rose-600 text-white hover:bg-rose-700"
+              >
+                Close Lead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
