@@ -59,9 +59,10 @@ export async function GET(request: NextRequest) {
     } else if (!status && stage === 'snoozed') {
       query = query.eq('status', 'snoozed').gt('snooze_until', now);
     } else if (status === 'active') {
-      query = query.eq('status', 'active');
+      // Compatibility: include legacy rows that still use stage-only semantics.
+      query = query.or('status.eq.active,stage.eq.lead_feed');
     } else if (status === 'snoozed') {
-      query = query.eq('status', 'snoozed').gt('snooze_until', now);
+      query = query.or('status.eq.snoozed,stage.eq.snoozed').gt('snooze_until', now);
     } else if (status === 'archived') {
       query = query.eq('status', 'archived');
     }

@@ -173,6 +173,8 @@ export async function POST(request: NextRequest) {
 
     const payload = normalizePayload(rawPayload);
     console.log('[webhook] Normalized:', JSON.stringify(payload, null, 2));
+    const firstName = payload.first_name || 'Unknown';
+    const lastName = payload.last_name || 'Contact';
 
     const supabase = getServiceClient();
     const now = new Date().toISOString();
@@ -206,10 +208,81 @@ export async function POST(request: NextRequest) {
       existingLead = data;
     }
 
-    // Daily Lead Feed V1 rule:
-    // if inbound does not match an existing lead, ignore here (prospect remains in inbox world).
+    // Backward-compatible behavior: create lead when no match is found.
     if (!existingLead) {
-      return NextResponse.json({ success: true, action: 'ignored_unknown_sender' });
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      const hasInbound = messages.some((msg) => msg.direction === 'inbound');
+
+      const { data: newLead, error: createError } = await supabase
+        .from('leads')
+        .insert({
+          first_name: firstName,
+          last_name: lastName,
+          name: `${firstName} ${lastName}`.trim(),
+          email: payload.email || null,
+          phone: payload.phone || null,
+          phone_numbers: payload.phone ? [payload.phone] : [],
+          title: payload.title || null,
+          company: payload.company || null,
+          linkedin_url: payload.linkedin_url || null,
+          company_website: payload.company_website || null,
+          getsales_uuid: payload.getsales_uuid || null,
+          source: 'getsales_webhook',
+          lead_source: payload.campaign_name || 'GetSales Webhook',
+          campaign_name: payload.campaign_name || null,
+          stage: 'lead_feed',
+          status: 'active',
+          has_unread: hasInbound,
+          last_inbound_at: hasInbound ? now : null,
+          last_activity: now,
+          last_activity_at: now,
+          created_at: now,
+          updated_at: now,
+        })
+        .select()
+        .single();
+
+      if (createError || !newLead) {
+        console.error('[webhook] Failed to create lead:', createError);
+        return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 });
+      }
+
+      if (messages.length > 0) {
+        const normalizedChannel =
+          payload.channel === 'email' || payload.channel === 'text'
+            ? payload.channel
+            : 'linkedin';
+
+        const activities = messages.map((msg) => {
+          const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
+          const type =
+            normalizedChannel === 'email'
+              ? direction === 'inbound'
+                ? 'email_received'
+                : 'email_sent'
+              : normalizedChannel === 'text'
+                ? direction === 'inbound'
+                  ? 'text_received'
+                  : 'text_sent'
+                : direction === 'inbound'
+                  ? 'linkedin_received'
+                  : 'linkedin_sent';
+
+          return {
+            lead_id: newLead.id,
+            type,
+            channel: normalizedChannel,
+            direction,
+            content: msg.content,
+            metadata: { source: 'getsales_webhook' },
+            created_at: msg.timestamp || now,
+          };
+        });
+
+        await supabase.from('activities').insert(activities);
+      }
+
+      return NextResponse.json({ success: true, action: 'created', lead_id: newLead.id });
     }
 
     const updates: Record<string, unknown> = {
