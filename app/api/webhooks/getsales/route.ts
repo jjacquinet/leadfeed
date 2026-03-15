@@ -106,6 +106,25 @@ function normalizePayload(raw: any) {
   };
 }
 
+function channelAndType(channel: string, direction: 'inbound' | 'outbound') {
+  if (channel === 'email') {
+    return {
+      channel: 'email',
+      type: direction === 'inbound' ? 'email_received' : 'email_sent',
+    };
+  }
+  if (channel === 'text') {
+    return {
+      channel: 'text',
+      type: direction === 'inbound' ? 'text_received' : 'text_sent',
+    };
+  }
+  return {
+    channel: 'linkedin',
+    type: direction === 'inbound' ? 'linkedin_received' : 'linkedin_sent',
+  };
+}
+
 /**
  * Parse the request body regardless of content type.
  */
@@ -212,8 +231,10 @@ export async function POST(request: NextRequest) {
     if (!existingLead) {
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const hasInbound = messages.some((msg) => msg.direction === 'inbound');
+      let newLead: any = null;
+      let createError: any = null;
 
-      const { data: newLead, error: createError } = await supabase
+      const createResult = await supabase
         .from('leads')
         .insert({
           first_name: firstName,
@@ -241,6 +262,36 @@ export async function POST(request: NextRequest) {
         })
         .select()
         .single();
+      newLead = createResult.data;
+      createError = createResult.error;
+
+      // Legacy-schema fallback (before V1 migration is applied in prod)
+      if (createError) {
+        const legacyResult = await supabase
+          .from('leads')
+          .insert({
+            first_name: firstName,
+            last_name: lastName,
+            email: payload.email || null,
+            phone: payload.phone || null,
+            phone_numbers: payload.phone ? [payload.phone] : [],
+            title: payload.title || null,
+            company: payload.company || null,
+            linkedin_url: payload.linkedin_url || null,
+            company_website: payload.company_website || null,
+            getsales_uuid: payload.getsales_uuid || null,
+            source: 'getsales_webhook',
+            campaign_name: payload.campaign_name || null,
+            stage: 'lead_feed',
+            last_activity: now,
+            created_at: now,
+            updated_at: now,
+          })
+          .select()
+          .single();
+        newLead = legacyResult.data;
+        createError = legacyResult.error;
+      }
 
       if (createError || !newLead) {
         console.error('[webhook] Failed to create lead:', createError);
@@ -255,18 +306,7 @@ export async function POST(request: NextRequest) {
 
         const activities = messages.map((msg) => {
           const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
-          const type =
-            normalizedChannel === 'email'
-              ? direction === 'inbound'
-                ? 'email_received'
-                : 'email_sent'
-              : normalizedChannel === 'text'
-                ? direction === 'inbound'
-                  ? 'text_received'
-                  : 'text_sent'
-                : direction === 'inbound'
-                  ? 'linkedin_received'
-                  : 'linkedin_sent';
+          const { type } = channelAndType(normalizedChannel, direction);
 
           return {
             lead_id: newLead.id,
@@ -278,8 +318,18 @@ export async function POST(request: NextRequest) {
             created_at: msg.timestamp || now,
           };
         });
-
-        await supabase.from('activities').insert(activities);
+        const activityInsert = await supabase.from('activities').insert(activities);
+        if (activityInsert.error) {
+          const legacyMessages = activities.map((event) => ({
+            lead_id: event.lead_id,
+            channel: event.channel === 'call' ? 'phone' : event.channel,
+            direction: event.direction === 'internal' ? 'outbound' : event.direction,
+            content: event.content,
+            is_note: event.channel === 'note',
+            timestamp: event.created_at,
+          }));
+          await supabase.from('messages').insert(legacyMessages);
+        }
       }
 
       return NextResponse.json({ success: true, action: 'created', lead_id: newLead.id });
@@ -318,7 +368,27 @@ export async function POST(request: NextRequest) {
       updates.last_inbound_at = now;
     }
 
-    await supabase.from('leads').update(updates).eq('id', existingLead.id);
+    const updateResult = await supabase.from('leads').update(updates).eq('id', existingLead.id);
+    if (updateResult.error) {
+      const legacyUpdates: Record<string, unknown> = {
+        updated_at: now,
+        last_activity: now,
+      };
+      if (payload.getsales_uuid && !existingLead.getsales_uuid) legacyUpdates.getsales_uuid = payload.getsales_uuid;
+      if (payload.email && !existingLead.email) legacyUpdates.email = payload.email;
+      if (payload.phone && !existingLead.phone) {
+        legacyUpdates.phone = payload.phone;
+        legacyUpdates.phone_numbers = [payload.phone];
+      }
+      if (payload.title) legacyUpdates.title = payload.title;
+      if (payload.company) legacyUpdates.company = payload.company;
+      if (payload.company_website && !existingLead.company_website) legacyUpdates.company_website = payload.company_website;
+      if (existingLead.stage === 'snoozed') {
+        legacyUpdates.stage = 'lead_feed';
+        legacyUpdates.snoozed_until = null;
+      }
+      await supabase.from('leads').update(legacyUpdates).eq('id', existingLead.id);
+    }
 
     if (messages.length > 0) {
       const normalizedChannel =
@@ -328,31 +398,30 @@ export async function POST(request: NextRequest) {
 
       const activities = messages.map((msg) => {
         const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
-        const type =
-          normalizedChannel === 'email'
-            ? direction === 'inbound'
-              ? 'email_received'
-              : 'email_sent'
-            : normalizedChannel === 'text'
-              ? direction === 'inbound'
-                ? 'text_received'
-                : 'text_sent'
-              : direction === 'inbound'
-                ? 'linkedin_received'
-                : 'linkedin_sent';
+        const { channel, type } = channelAndType(normalizedChannel, direction);
 
         return {
           lead_id: existingLead.id,
           type,
-          channel: normalizedChannel,
+          channel,
           direction,
           content: msg.content,
           metadata: { source: 'getsales_webhook' },
           created_at: msg.timestamp || now,
         };
       });
-
-      await supabase.from('activities').insert(activities);
+      const activityInsert = await supabase.from('activities').insert(activities);
+      if (activityInsert.error) {
+        const legacyMessages = activities.map((event) => ({
+          lead_id: event.lead_id,
+          channel: event.channel === 'call' ? 'phone' : event.channel,
+          direction: event.direction === 'internal' ? 'outbound' : event.direction,
+          content: event.content,
+          is_note: event.channel === 'note',
+          timestamp: event.created_at,
+        }));
+        await supabase.from('messages').insert(legacyMessages);
+      }
     }
 
     console.log('[webhook] Updated lead:', existingLead.id);

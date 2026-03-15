@@ -67,7 +67,25 @@ export async function GET(request: NextRequest) {
       query = query.eq('status', 'archived');
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    // Legacy schema fallback when V1 columns are not yet present in production.
+    if (error) {
+      const legacyQuery = supabase.from('leads').select('*');
+      let legacy = legacyQuery;
+      if (!status || status === 'active' || stage === 'lead_feed') {
+        legacy = legacy.or(
+          'stage.eq.lead_feed,and(stage.eq.snoozed,snoozed_until.lte.' +
+            now +
+            ')'
+        );
+      } else if (status === 'snoozed' || stage === 'snoozed') {
+        legacy = legacy.eq('stage', 'snoozed').gt('snoozed_until', now);
+      }
+      const legacyResult = await legacy;
+      data = legacyResult.data;
+      error = legacyResult.error;
+    }
 
     if (error) {
       console.error('Error fetching leads:', error);
