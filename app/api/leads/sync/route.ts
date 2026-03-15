@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { fetchLinkedInMessages, fetchEmails, lookupContact } from '@/lib/getsales';
+import { cleanEmailReplyContent } from '@/lib/utils';
 
 /**
  * Sync conversations from GetSales.io for a specific lead.
@@ -113,23 +114,9 @@ export async function POST(request: NextRequest) {
       const externalId = `gs_em_${email.uuid}`;
       if (existingExternalIds.has(externalId)) continue;
 
-      // Strip HTML tags from email body if present
-      let body = email.body || '';
-      if (body.includes('<') && body.includes('>')) {
-        body = body
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<\/p>/gi, '\n\n')
-          .replace(/<\/div>/gi, '\n')
-          .replace(/<[^>]+>/g, '')
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
-      }
+      const rawBody = email.body || '';
+      const cleaned = cleanEmailReplyContent(rawBody);
+      const body = cleaned.cleanedContent;
 
       const content = email.subject
         ? `**${email.subject}**\n\n${body}`
@@ -144,7 +131,12 @@ export async function POST(request: NextRequest) {
         channel: 'email',
         direction: email.type === 'inbox' ? 'inbound' : 'outbound',
         content,
-        metadata: { external_id: externalId, source: 'getsales_sync' },
+        metadata: {
+          external_id: externalId,
+          source: 'getsales_sync',
+          raw_content: rawBody,
+          email_cleaned: cleaned.wasCleaned,
+        },
         created_at: email.sent_at || new Date().toISOString(),
       });
     }

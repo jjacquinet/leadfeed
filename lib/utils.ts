@@ -70,3 +70,82 @@ export function formatSnoozeRemaining(snoozedUntil: string): string {
   const diffMins = Math.floor(diffMs / 60000);
   return `${diffMins}m remaining`;
 }
+
+function stripHtmlToText(input: string): string {
+  if (!input.includes('<') || !input.includes('>')) return input;
+  return input
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function stripTrailingSignature(input: string): string {
+  const dashSignatureIdx = input.search(/\n--\s*\n/);
+  if (dashSignatureIdx >= 0) {
+    return input.slice(0, dashSignatureIdx).trim();
+  }
+
+  const lines = input.split('\n');
+  const valedictionRegex = /^(best|best regards|regards|thanks|thank you|sincerely|cheers)\b[,\s]*$/i;
+  // Look only near the end to avoid clipping mid-message content.
+  const start = Math.max(1, lines.length - 8);
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (valedictionRegex.test(line)) {
+      return lines.slice(0, i).join('\n').trim();
+    }
+  }
+  return input.trim();
+}
+
+export function cleanEmailReplyContent(rawContent: string): {
+  cleanedContent: string;
+  rawContent: string;
+  wasCleaned: boolean;
+} {
+  const raw = (rawContent || '').trim();
+  if (!raw) {
+    return { cleanedContent: '', rawContent: '', wasCleaned: false };
+  }
+
+  let normalized = stripHtmlToText(raw)
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const quoteMarkers: RegExp[] = [
+    /^\s*On .+wrote:\s*$/im,
+    /^\s*From:\s.+$/im,
+    /^\s*Sent:\s.+$/im,
+    /^\s*-----Original Message-----\s*$/im,
+    /^\s*>.+$/im,
+  ];
+
+  let cutoffIdx = -1;
+  for (const marker of quoteMarkers) {
+    const match = marker.exec(normalized);
+    if (match && match.index >= 0) {
+      cutoffIdx = cutoffIdx === -1 ? match.index : Math.min(cutoffIdx, match.index);
+    }
+  }
+  if (cutoffIdx >= 0) {
+    normalized = normalized.slice(0, cutoffIdx).trim();
+  }
+
+  const cleaned = stripTrailingSignature(normalized);
+  const finalContent = cleaned || normalized || raw;
+  return {
+    cleanedContent: finalContent,
+    rawContent: raw,
+    wasCleaned: finalContent !== raw,
+  };
+}

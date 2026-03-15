@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Lead } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
+import { cleanEmailReplyContent } from '@/lib/utils';
 
 type FeedTab = 'all' | 'replies' | 'done';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
@@ -78,6 +79,14 @@ function isRawWebhookPayload(content: string): boolean {
     trimmed.includes('"event_name"') ||
     trimmed.includes('"getsales_url"')
   );
+}
+
+function getDisplayContent(activity: Activity): string {
+  if (activity.channel === 'email') {
+    const cleaned = cleanEmailReplyContent(activity.content || '');
+    return cleaned.cleanedContent || activity.content;
+  }
+  return activity.content;
 }
 
 export default function HomePage() {
@@ -432,7 +441,7 @@ export default function HomePage() {
                         <span>{eventLabel(activity)} · {fmtRelative(activity.created_at)}</span>
                       </div>
                       <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${bubbleClass(activity)}`}>
-                        {activity.content}
+                        {getDisplayContent(activity)}
                       </div>
                     </div>
                   </div>

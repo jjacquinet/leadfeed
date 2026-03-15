@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServiceClient } from '@/lib/supabase';
+import { cleanEmailReplyContent } from '@/lib/utils';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -307,14 +308,26 @@ export async function POST(request: NextRequest) {
         const activities = messages.map((msg) => {
           const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
           const { type } = channelAndType(normalizedChannel, direction);
+          const maybeEmail = normalizedChannel === 'email'
+            ? cleanEmailReplyContent(msg.content || '')
+            : null;
+          const eventContent = maybeEmail ? maybeEmail.cleanedContent : msg.content;
 
           return {
             lead_id: newLead.id,
             type,
             channel: normalizedChannel,
             direction,
-            content: msg.content,
-            metadata: { source: 'getsales_webhook' },
+            content: eventContent,
+            metadata: {
+              source: 'getsales_webhook',
+              ...(maybeEmail
+                ? {
+                    raw_content: msg.content,
+                    email_cleaned: maybeEmail.wasCleaned,
+                  }
+                : {}),
+            },
             created_at: msg.timestamp || now,
           };
         });
@@ -399,14 +412,26 @@ export async function POST(request: NextRequest) {
       const activities = messages.map((msg) => {
         const direction = msg.direction === 'inbound' ? 'inbound' : 'outbound';
         const { channel, type } = channelAndType(normalizedChannel, direction);
+        const maybeEmail = channel === 'email'
+          ? cleanEmailReplyContent(msg.content || '')
+          : null;
+        const eventContent = maybeEmail ? maybeEmail.cleanedContent : msg.content;
 
         return {
           lead_id: existingLead.id,
           type,
           channel,
           direction,
-          content: msg.content,
-          metadata: { source: 'getsales_webhook' },
+          content: eventContent,
+          metadata: {
+            source: 'getsales_webhook',
+            ...(maybeEmail
+              ? {
+                  raw_content: msg.content,
+                  email_cleaned: maybeEmail.wasCleaned,
+                }
+              : {}),
+          },
           created_at: msg.timestamp || now,
         };
       });
