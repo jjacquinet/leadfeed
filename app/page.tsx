@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Lead } from '@/lib/types';
+import ChannelIcon from '@/components/ui/ChannelIcon';
 
 type FeedTab = 'all' | 'replies' | 'done';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
@@ -70,6 +71,15 @@ function bubbleClass(activity: Activity): string {
   return 'bg-slate-50 border border-slate-200 text-slate-700';
 }
 
+function isRawWebhookPayload(content: string): boolean {
+  const trimmed = content.trim();
+  return (
+    trimmed.startsWith('[Raw webhook payload]') ||
+    trimmed.includes('"event_name"') ||
+    trimmed.includes('"getsales_url"')
+  );
+}
+
 export default function HomePage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [activitiesByLead, setActivitiesByLead] = useState<Record<string, Activity[]>>({});
@@ -93,7 +103,10 @@ export default function HomePage() {
     () => leads.find((lead) => lead.id === selectedLeadId) ?? null,
     [leads, selectedLeadId]
   );
-  const selectedActivities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
+  const selectedActivities = useMemo(() => {
+    const activities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
+    return activities.filter((activity) => !isRawWebhookPayload(activity.content));
+  }, [selectedLeadId, activitiesByLead]);
 
   const loadLeads = useCallback(async () => {
     const [activeRes, snoozedRes] = await Promise.all([
@@ -414,9 +427,10 @@ export default function HomePage() {
                     className={`flex ${activity.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div className="max-w-[80%]">
-                      <p className="text-[11px] text-slate-400 mb-1">
-                        {eventLabel(activity)} · {fmtRelative(activity.created_at)}
-                      </p>
+                      <div className="text-[11px] text-slate-400 mb-1 flex items-center gap-1.5">
+                        <ChannelIcon channel={activity.channel} className="w-3.5 h-3.5" />
+                        <span>{eventLabel(activity)} · {fmtRelative(activity.created_at)}</span>
+                      </div>
                       <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${bubbleClass(activity)}`}>
                         {activity.content}
                       </div>
