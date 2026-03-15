@@ -142,6 +142,15 @@ export default function HomePage() {
     }
   }, []);
 
+  const syncAndLoadActivities = useCallback(async (leadId: string) => {
+    try {
+      await fetch(`/api/leads/sync?lead_id=${leadId}`, { method: 'POST' });
+    } catch {
+      // Non-blocking: still load whatever exists locally.
+    }
+    await loadActivities(leadId);
+  }, [loadActivities]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -154,8 +163,8 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!selectedLeadId) return;
-    loadActivities(selectedLeadId);
-  }, [selectedLeadId, loadActivities]);
+    syncAndLoadActivities(selectedLeadId);
+  }, [selectedLeadId, syncAndLoadActivities]);
 
   useEffect(() => {
     timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' });
@@ -214,6 +223,9 @@ export default function HomePage() {
     setRefreshing(true);
     try {
       await loadLeads();
+      if (selectedLeadId) {
+        await syncAndLoadActivities(selectedLeadId);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -266,7 +278,7 @@ export default function HomePage() {
       });
     }
 
-    await Promise.all([loadActivities(selectedLeadId), loadLeads()]);
+    await Promise.all([syncAndLoadActivities(selectedLeadId), loadLeads()]);
     completeTask();
   };
 
@@ -282,7 +294,7 @@ export default function HomePage() {
         metadata: { outcome },
       }),
     });
-    await Promise.all([loadActivities(selectedLeadId), loadLeads()]);
+    await Promise.all([syncAndLoadActivities(selectedLeadId), loadLeads()]);
     completeTask();
   };
 

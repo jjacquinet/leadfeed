@@ -67,7 +67,14 @@ function normalizePayload(raw: any) {
 
   // Messages
   let messages: { direction: string; content: string; timestamp?: string }[] = [];
-  const rawMessages = raw.messages || raw.conversation || raw.message_history;
+  const rawMessages =
+    raw.messages ||
+    raw.conversation ||
+    raw.message_history ||
+    raw.contact?.messages ||
+    raw.data?.messages ||
+    raw.payload?.messages ||
+    raw.record?.messages;
   if (Array.isArray(rawMessages) && rawMessages.length > 0) {
     messages = rawMessages
       .filter((msg: any) => {
@@ -75,7 +82,11 @@ function normalizePayload(raw: any) {
         return content && String(content).trim().length > 0;
       })
       .map((msg: any) => ({
-        direction: msg.direction || msg.type || (msg.is_reply ? 'inbound' : 'outbound'),
+        direction: (() => {
+          const rawDirection = String(msg.direction || msg.type || (msg.is_reply ? 'inbound' : 'outbound')).toLowerCase();
+          if (rawDirection === 'inbox' || rawDirection === 'inbound') return 'inbound';
+          return 'outbound';
+        })(),
         content: String(msg.content || msg.text || msg.body || msg.message),
         timestamp: msg.timestamp || msg.date || msg.sent_at || msg.created_at,
       }));
