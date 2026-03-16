@@ -1028,26 +1028,19 @@ export default function HomePage() {
                 </div>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">LINKEDIN</p>
-                  <div className="mt-1 flex items-center gap-1.5">
+                  <div className="mt-1">
                     {selectedLead.linkedin_url ? (
                       <a
                         href={selectedLead.linkedin_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-w-0 flex-1 text-indigo-600 hover:underline truncate"
+                        className="min-w-0 text-indigo-600 hover:underline break-all"
                       >
                         {selectedLead.linkedin_url}
                       </a>
                     ) : (
-                      <p className="min-w-0 flex-1 text-slate-500">—</p>
+                      <p className="text-slate-500">—</p>
                     )}
-                    <button
-                      onClick={() => setComposeChannel('linkedin')}
-                      className="h-6 px-1.5 inline-flex items-center rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
-                      title="Compose LinkedIn message"
-                    >
-                      LinkedIn
-                    </button>
                   </div>
                 </div>
                 <div className="text-xs text-slate-700">
