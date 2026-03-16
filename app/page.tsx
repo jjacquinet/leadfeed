@@ -126,6 +126,13 @@ function toTelHref(phone: string): string | null {
   return `tel:${hasLeadingPlus ? '+' : ''}${digitsOnly}`;
 }
 
+function normalizeUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -154,6 +161,9 @@ export default function HomePage() {
   const [phoneInput, setPhoneInput] = useState('');
   const [savingPhone, setSavingPhone] = useState(false);
   const [enrichingPhone, setEnrichingPhone] = useState(false);
+  const [editingWebsite, setEditingWebsite] = useState(false);
+  const [websiteInput, setWebsiteInput] = useState('');
+  const [savingWebsite, setSavingWebsite] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [leftWidth, setLeftWidth] = useState(300);
@@ -253,6 +263,9 @@ export default function HomePage() {
     setPhoneInput('');
     setSavingPhone(false);
     setEnrichingPhone(false);
+    setEditingWebsite(false);
+    setWebsiteInput('');
+    setSavingWebsite(false);
   }, [selectedLeadId]);
 
   useEffect(() => {
@@ -468,6 +481,18 @@ export default function HomePage() {
     await loadLeads();
   };
 
+  const updateLeadWebsite = async (leadId: string, website: string | null) => {
+    const response = await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: leadId, company_website: website }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update website');
+    }
+    await loadLeads();
+  };
+
   const savePhoneEdit = async (index: number) => {
     if (!selectedLead || savingPhone) return;
     const trimmedPhone = phoneInput.trim();
@@ -529,6 +554,23 @@ export default function HomePage() {
       alert(error instanceof Error ? error.message : 'Failed to enrich phone numbers.');
     } finally {
       setEnrichingPhone(false);
+    }
+  };
+
+  const saveWebsite = async () => {
+    if (!selectedLead || savingWebsite) return;
+    const normalized = normalizeUrl(websiteInput);
+    if (!normalized) return;
+    try {
+      setSavingWebsite(true);
+      await updateLeadWebsite(selectedLead.id, normalized);
+      setEditingWebsite(false);
+      setWebsiteInput('');
+    } catch (error) {
+      console.error('Failed to save website:', error);
+      alert('Failed to save website.');
+    } finally {
+      setSavingWebsite(false);
     }
   };
 
@@ -986,7 +1028,94 @@ export default function HomePage() {
                 </div>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">LINKEDIN</p>
-                  <p className="break-all">{selectedLead.linkedin_url || '—'}</p>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    {selectedLead.linkedin_url ? (
+                      <a
+                        href={selectedLead.linkedin_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 flex-1 text-indigo-600 hover:underline truncate"
+                      >
+                        {selectedLead.linkedin_url}
+                      </a>
+                    ) : (
+                      <p className="min-w-0 flex-1 text-slate-500">—</p>
+                    )}
+                    <button
+                      onClick={() => setComposeChannel('linkedin')}
+                      className="h-6 px-1.5 inline-flex items-center rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                      title="Compose LinkedIn message"
+                    >
+                      LinkedIn
+                    </button>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">WEBSITE</p>
+                  <div className="mt-1">
+                    {editingWebsite ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="url"
+                          value={websiteInput}
+                          onChange={(event) => setWebsiteInput(event.target.value)}
+                          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                          placeholder="https://company.com"
+                        />
+                        <button
+                          onClick={saveWebsite}
+                          disabled={savingWebsite || !websiteInput.trim()}
+                          className="h-6 w-6 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                          title="Save"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingWebsite(false);
+                            setWebsiteInput('');
+                          }}
+                          className="h-6 w-6 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                          title="Cancel"
+                        >
+                          x
+                        </button>
+                      </div>
+                    ) : selectedLead.company_website ? (
+                      <div className="flex items-center gap-1.5">
+                        <a
+                          href={selectedLead.company_website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-w-0 flex-1 text-indigo-600 hover:underline truncate"
+                        >
+                          {selectedLead.company_website}
+                        </a>
+                        <button
+                          onClick={() => {
+                            setEditingWebsite(true);
+                            setWebsiteInput(selectedLead.company_website || '');
+                          }}
+                          className="h-6 w-6 inline-flex items-center justify-center rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                          title="Edit website"
+                        >
+                          <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-8.95 8.95a1 1 0 01-.423.258l-3 1a1 1 0 01-1.265-1.265l1-3a1 1 0 01.258-.423l8.95-8.95zM12.172 5L5 12.172V14h1.828L14 6.828 12.172 5z" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditingWebsite(true);
+                          setWebsiteInput('');
+                        }}
+                        className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                      >
+                        Add Website
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">LOCATION</p>
