@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Lead } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
 import { cleanEmailReplyContent } from '@/lib/utils';
+import { MAX_PHONE_NUMBERS, normalizePhoneNumbers } from '@/lib/phones';
 
 type FeedTab = 'today' | 'snoozed' | 'closed';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
@@ -116,6 +117,15 @@ function formatClosedDate(iso?: string | null): string {
   return `Closed ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
+function toTelHref(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+  const hasLeadingPlus = trimmed.startsWith('+');
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  if (!digitsOnly) return null;
+  return `tel:${hasLeadingPlus ? '+' : ''}${digitsOnly}`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -140,6 +150,10 @@ export default function HomePage() {
   const [snoozedCount, setSnoozedCount] = useState(0);
   const [closedCount, setClosedCount] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [editingPhoneIndex, setEditingPhoneIndex] = useState<number | null>(null);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
+  const [enrichingPhone, setEnrichingPhone] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [leftWidth, setLeftWidth] = useState(300);
@@ -162,6 +176,13 @@ export default function HomePage() {
   );
   const selectedLeadStatus = selectedLead?.status as string | undefined;
   const selectedLeadClosed = selectedLeadStatus === 'closed' || selectedLeadStatus === 'archived';
+  const selectedLeadPhoneNumbers = useMemo(() => {
+    if (!selectedLead) return [];
+    return normalizePhoneNumbers([
+      ...(Array.isArray(selectedLead.phone_numbers) ? selectedLead.phone_numbers : []),
+      selectedLead.phone,
+    ]);
+  }, [selectedLead]);
   const selectedActivities = useMemo(() => {
     const activities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
     return activities.filter((activity) => !isRawWebhookPayload(activity.content));
@@ -226,6 +247,13 @@ export default function HomePage() {
     if (!selectedLeadId) return;
     syncAndLoadActivities(selectedLeadId);
   }, [selectedLeadId, syncAndLoadActivities]);
+
+  useEffect(() => {
+    setEditingPhoneIndex(null);
+    setPhoneInput('');
+    setSavingPhone(false);
+    setEnrichingPhone(false);
+  }, [selectedLeadId]);
 
   useEffect(() => {
     const enrichLeads = tab === 'snoozed' ? snoozedLeads : tab === 'closed' ? closedLeads : [];
@@ -426,6 +454,82 @@ export default function HomePage() {
     await loadLeads();
     setTab('today');
     setSelectedLeadId(leadId);
+  };
+
+  const updateLeadPhoneNumbers = async (leadId: string, phoneNumbers: string[]) => {
+    const response = await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: leadId, phone_numbers: phoneNumbers }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update phone numbers');
+    }
+    await loadLeads();
+  };
+
+  const savePhoneEdit = async (index: number) => {
+    if (!selectedLead || savingPhone) return;
+    const trimmedPhone = phoneInput.trim();
+    if (!trimmedPhone) return;
+
+    try {
+      setSavingPhone(true);
+      const next = [...selectedLeadPhoneNumbers];
+      if (index >= next.length) {
+        next.push(trimmedPhone);
+      } else {
+        next[index] = trimmedPhone;
+      }
+      await updateLeadPhoneNumbers(selectedLead.id, next);
+      setEditingPhoneIndex(null);
+      setPhoneInput('');
+    } catch (error) {
+      console.error('Failed to save phone number:', error);
+      alert('Failed to save phone number.');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
+  const deletePhone = async (index: number) => {
+    if (!selectedLead || savingPhone) return;
+    try {
+      setSavingPhone(true);
+      const next = selectedLeadPhoneNumbers.filter((_, phoneIndex) => phoneIndex !== index);
+      await updateLeadPhoneNumbers(selectedLead.id, next);
+      if (editingPhoneIndex === index) {
+        setEditingPhoneIndex(null);
+        setPhoneInput('');
+      }
+    } catch (error) {
+      console.error('Failed to delete phone number:', error);
+      alert('Failed to delete phone number.');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
+  const enrichPhonesFromApollo = async () => {
+    if (!selectedLead || enrichingPhone) return;
+    try {
+      setEnrichingPhone(true);
+      const response = await fetch('/api/leads/enrich-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selectedLead.id }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Enrichment failed');
+      }
+      await loadLeads();
+    } catch (error) {
+      console.error('Failed to enrich phone numbers:', error);
+      alert(error instanceof Error ? error.message : 'Failed to enrich phone numbers.');
+    } finally {
+      setEnrichingPhone(false);
+    }
   };
 
   if (loading) {
@@ -749,8 +853,136 @@ export default function HomePage() {
                   <p>{selectedLead.email || '—'}</p>
                 </div>
                 <div className="text-xs text-slate-700">
-                  <p className="text-slate-400">PHONE</p>
-                  <p>{selectedLead.phone || '—'}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-slate-400">PHONE NUMBERS</p>
+                  </div>
+                  <div className="mt-1 space-y-1.5">
+                    {selectedLeadPhoneNumbers.map((phone, index) => {
+                      const telHref = toTelHref(phone);
+                      const isEditing = editingPhoneIndex === index;
+                      return (
+                        <div key={`${selectedLead.id}-phone-${index}`} className="flex items-center gap-1.5">
+                          {isEditing ? (
+                            <>
+                              <input
+                                type="tel"
+                                value={phoneInput}
+                                onChange={(event) => setPhoneInput(event.target.value)}
+                                className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                                placeholder="Phone number"
+                              />
+                              <button
+                                onClick={() => savePhoneEdit(index)}
+                                disabled={savingPhone || !phoneInput.trim()}
+                                className="h-6 w-6 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                                title="Save"
+                              >
+                                ✓
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingPhoneIndex(null);
+                                  setPhoneInput('');
+                                }}
+                                className="h-6 w-6 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                                title="Cancel"
+                              >
+                                x
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="min-w-0 flex-1 truncate">{phone}</span>
+                              {telHref && (
+                                <a
+                                  href={telHref}
+                                  className="h-6 px-1.5 inline-flex items-center rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                  title="Call (right-click to use native options)"
+                                >
+                                  Call
+                                </a>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setEditingPhoneIndex(index);
+                                  setPhoneInput(phone);
+                                }}
+                                className="h-6 w-6 inline-flex items-center justify-center rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                                title="Edit"
+                              >
+                                <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-8.95 8.95a1 1 0 01-.423.258l-3 1a1 1 0 01-1.265-1.265l1-3a1 1 0 01.258-.423l8.95-8.95zM12.172 5L5 12.172V14h1.828L14 6.828 12.172 5z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => deletePhone(index)}
+                                disabled={savingPhone}
+                                className="h-6 w-6 inline-flex items-center justify-center rounded border border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                title="Delete"
+                              >
+                                x
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {editingPhoneIndex === selectedLeadPhoneNumbers.length && selectedLeadPhoneNumbers.length < MAX_PHONE_NUMBERS && (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="tel"
+                          value={phoneInput}
+                          onChange={(event) => setPhoneInput(event.target.value)}
+                          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                          placeholder="Add phone number"
+                        />
+                        <button
+                          onClick={() => savePhoneEdit(selectedLeadPhoneNumbers.length)}
+                          disabled={savingPhone || !phoneInput.trim()}
+                          className="h-6 w-6 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                          title="Save"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingPhoneIndex(null);
+                            setPhoneInput('');
+                          }}
+                          className="h-6 w-6 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                          title="Cancel"
+                        >
+                          x
+                        </button>
+                      </div>
+                    )}
+
+                    {selectedLeadPhoneNumbers.length === 0 && editingPhoneIndex === null && (
+                      <p className="text-slate-500">—</p>
+                    )}
+
+                    <div className="pt-1 flex items-center gap-1.5">
+                      {selectedLeadPhoneNumbers.length < MAX_PHONE_NUMBERS && editingPhoneIndex === null && (
+                        <button
+                          onClick={() => {
+                            setEditingPhoneIndex(selectedLeadPhoneNumbers.length);
+                            setPhoneInput('');
+                          }}
+                          className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                        >
+                          Add Phone
+                        </button>
+                      )}
+                      <button
+                        onClick={enrichPhonesFromApollo}
+                        disabled={enrichingPhone}
+                        className="px-2 py-1 text-[11px] rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        {enrichingPhone ? 'Enriching...' : 'Enrich from Apollo'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">LINKEDIN</p>

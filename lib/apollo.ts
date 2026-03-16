@@ -61,6 +61,9 @@ function collectPhoneCandidates(value: any, keyPath = ''): string[] {
 export async function enrichPhonesFromApollo(params: {
   linkedinUrl?: string | null;
   email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
   webhookUrl?: string | null;
 }): Promise<{ phones: string[]; raw: any; deferred: boolean }> {
   const body: Record<string, unknown> = {};
@@ -69,6 +72,10 @@ export async function enrichPhonesFromApollo(params: {
     body.linkedin_url = params.linkedinUrl;
   } else if (params.email) {
     body.email = params.email;
+  } else if (params.firstName && params.lastName && params.company) {
+    body.first_name = params.firstName;
+    body.last_name = params.lastName;
+    body.organization_name = params.company;
   } else {
     return { phones: [], raw: null, deferred: false };
   }

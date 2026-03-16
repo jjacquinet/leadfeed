@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
     const { data: lead, error: leadError } = await supabase
       .from('leads')
-      .select('id, email, linkedin_url, phone, phone_numbers')
+      .select('id, email, linkedin_url, first_name, last_name, company, phone, phone_numbers')
       .eq('id', leadId)
       .single();
 
@@ -23,9 +23,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    if (!lead.linkedin_url && !lead.email) {
+    const hasNameAndCompany =
+      Boolean(lead.first_name?.trim()) &&
+      Boolean(lead.last_name?.trim()) &&
+      Boolean(lead.company?.trim());
+
+    if (!lead.linkedin_url && !lead.email && !hasNameAndCompany) {
       return NextResponse.json(
-        { error: 'Lead requires LinkedIn URL or email for enrichment' },
+        { error: 'Lead requires LinkedIn URL, email, or full name + company for enrichment' },
         { status: 400 }
       );
     }
@@ -43,6 +48,9 @@ export async function POST(request: NextRequest) {
     const enrichment = await enrichPhonesFromApollo({
       linkedinUrl: lead.linkedin_url,
       email: lead.email,
+      firstName: lead.first_name,
+      lastName: lead.last_name,
+      company: lead.company,
       webhookUrl,
     });
 
