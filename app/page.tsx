@@ -226,6 +226,8 @@ export default function HomePage() {
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
   const [addingLead, setAddingLead] = useState(false);
+  const [enrichingAddLead, setEnrichingAddLead] = useState(false);
+  const [addLeadEnrichMessage, setAddLeadEnrichMessage] = useState('');
   const [addLeadForm, setAddLeadForm] = useState<AddLeadForm>({
     first_name: '',
     last_name: '',
@@ -852,6 +854,60 @@ export default function HomePage() {
       email: '',
       phone: '',
     });
+    setAddLeadEnrichMessage('');
+  };
+
+  const enrichAddLeadFromLinkedIn = async () => {
+    const linkedinUrl = addLeadForm.linkedin_url.trim();
+    if (!linkedinUrl || enrichingAddLead) return;
+    try {
+      setEnrichingAddLead(true);
+      setAddLeadEnrichMessage('');
+      const response = await fetch('/api/leads/enrich-linkedin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkedin_url: linkedinUrl }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' ? payload.error : 'Failed to enrich from Apollo';
+        alert(message);
+        return;
+      }
+
+      if (!payload?.matched || !payload?.data) {
+        setAddLeadForm((prev) => ({
+          ...prev,
+          first_name: '',
+          last_name: '',
+          title: '',
+          company: '',
+          company_website: '',
+          email: '',
+          phone: '',
+        }));
+        setAddLeadEnrichMessage('No match found — add details manually');
+        return;
+      }
+
+      setAddLeadForm((prev) => ({
+        ...prev,
+        first_name: payload.data.first_name || prev.first_name,
+        last_name: payload.data.last_name || prev.last_name,
+        title: payload.data.title || prev.title,
+        company: payload.data.company || prev.company,
+        company_website: payload.data.company_website || prev.company_website,
+        email: payload.data.email || prev.email,
+        phone: payload.data.phone || prev.phone,
+      }));
+      setAddLeadEnrichMessage('Details enriched from Apollo');
+    } catch (error) {
+      console.error('Failed to enrich lead from LinkedIn:', error);
+      alert('Failed to enrich from Apollo.');
+    } finally {
+      setEnrichingAddLead(false);
+    }
   };
 
   const submitAddLead = async () => {
@@ -1638,6 +1694,27 @@ export default function HomePage() {
               <p className="mt-1 text-sm text-slate-500">Create a lead for today&apos;s queue.</p>
             </div>
             <div className="px-5 py-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={addLeadForm.linkedin_url}
+                  onChange={(event) => {
+                    setAddLeadForm((prev) => ({ ...prev, linkedin_url: event.target.value }));
+                    if (addLeadEnrichMessage) setAddLeadEnrichMessage('');
+                  }}
+                  placeholder="LinkedIn Profile URL"
+                  className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                />
+                <button
+                  onClick={enrichAddLeadFromLinkedIn}
+                  disabled={enrichingAddLead || !addLeadForm.linkedin_url.trim()}
+                  className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {enrichingAddLead ? 'Enriching...' : 'Enrich'}
+                </button>
+              </div>
+              {addLeadEnrichMessage && (
+                <p className="text-xs text-slate-500">{addLeadEnrichMessage}</p>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <input
                   value={addLeadForm.first_name}
@@ -1678,14 +1755,6 @@ export default function HomePage() {
                   setAddLeadForm((prev) => ({ ...prev, company_website: event.target.value }))
                 }
                 placeholder="Company Website"
-                className="w-full p-2 text-sm border border-slate-200 rounded-md"
-              />
-              <input
-                value={addLeadForm.linkedin_url}
-                onChange={(event) =>
-                  setAddLeadForm((prev) => ({ ...prev, linkedin_url: event.target.value }))
-                }
-                placeholder="LinkedIn Profile URL"
                 className="w-full p-2 text-sm border border-slate-200 rounded-md"
               />
               <input
