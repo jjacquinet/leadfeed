@@ -136,6 +136,15 @@ export async function POST(request: NextRequest) {
           source: 'getsales_sync',
           raw_content: rawBody,
           email_cleaned: cleaned.wasCleaned,
+          subject: email.subject || null,
+          sender_profile_uuid:
+            typeof email.sender_profile_uuid === 'string' ? email.sender_profile_uuid : null,
+          thread_id:
+            (typeof email.thread_id === 'string' && email.thread_id) ||
+            (typeof email.thread_uuid === 'string' && email.thread_uuid) ||
+            (typeof email.email_thread_uuid === 'string' && email.email_thread_uuid) ||
+            null,
+          email_uuid: email.uuid || null,
         },
         created_at: email.sent_at || new Date().toISOString(),
       });

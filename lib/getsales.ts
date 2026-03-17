@@ -371,12 +371,36 @@ export async function sendEmail(params: {
   to_email: string;
   subject: string;
   body: string;
+  thread_id?: string;
+  reply_to_email_uuid?: string;
+  attachments?: Array<{
+    filename: string;
+    content_type?: string;
+    content_base64: string;
+    size?: number;
+  }>;
 }) {
+  const attachments = (params.attachments || []).map((attachment) => ({
+    filename: attachment.filename,
+    name: attachment.filename,
+    content_type: attachment.content_type || 'application/octet-stream',
+    mime_type: attachment.content_type || 'application/octet-stream',
+    content_base64: attachment.content_base64,
+    data: attachment.content_base64,
+    size: attachment.size || undefined,
+  }));
+
   const response = await fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
       ...params,
+      thread_id: params.thread_id || undefined,
+      email_thread_uuid: params.thread_id || undefined,
+      reply_to_email_uuid: params.reply_to_email_uuid || undefined,
+      parent_email_uuid: params.reply_to_email_uuid || undefined,
+      attachments,
+      files: attachments,
       cc: [],
       bcc: [],
     }),

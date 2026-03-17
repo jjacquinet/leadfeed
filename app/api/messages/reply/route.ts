@@ -9,12 +9,21 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { lead_id, sender_profile_uuid, channel, content, subject } = body as {
+    const { lead_id, sender_profile_uuid, channel, content, subject, email_mode, thread_id, reply_to_email_uuid, attachments } = body as {
       lead_id?: string;
       sender_profile_uuid?: string;
       channel?: 'linkedin' | 'email';
       content?: string;
       subject?: string;
+      email_mode?: 'reply' | 'new';
+      thread_id?: string;
+      reply_to_email_uuid?: string;
+      attachments?: Array<{
+        filename: string;
+        content_type?: string;
+        content_base64: string;
+        size?: number;
+      }>;
     };
 
     if (!lead_id || !sender_profile_uuid || !channel || !content?.trim()) {
@@ -95,7 +104,15 @@ export async function POST(request: NextRequest) {
       }
 
       const emailSubject = subject?.trim() || 'Quick follow-up';
-      await sendEmail({
+      const safeAttachments = Array.isArray(attachments)
+        ? attachments.filter(
+            (item) =>
+              item &&
+              typeof item.filename === 'string' &&
+              typeof item.content_base64 === 'string'
+          )
+        : [];
+      const result = await sendEmail({
         sender_profile_uuid,
         lead_uuid: leadUuid,
         from_name: resolvedFromName || 'Outbounder',
@@ -104,7 +121,20 @@ export async function POST(request: NextRequest) {
         to_email: lead.email,
         subject: emailSubject,
         body: messageText,
+        thread_id: typeof thread_id === 'string' ? thread_id : undefined,
+        reply_to_email_uuid:
+          typeof reply_to_email_uuid === 'string' ? reply_to_email_uuid : undefined,
+        attachments: safeAttachments,
       });
+      const sentEmailUuid =
+        typeof result?.uuid === 'string'
+          ? result.uuid
+          : typeof result?.data?.uuid === 'string'
+            ? result.data.uuid
+            : null;
+      if (sentEmailUuid) {
+        externalId = `gs_em_${sentEmailUuid}`;
+      }
       messageContent = `**${emailSubject}**\n\n${messageText}`;
     }
 
@@ -121,7 +151,24 @@ export async function POST(request: NextRequest) {
         channel,
         direction: 'outbound',
         content: messageContent,
-        metadata: externalId ? { external_id: externalId } : null,
+        metadata: {
+          ...(externalId ? { external_id: externalId } : {}),
+          sender_profile_uuid,
+          subject: subject?.trim() || null,
+          email_mode: email_mode || null,
+          thread_id: typeof thread_id === 'string' ? thread_id : null,
+          reply_to_email_uuid:
+            typeof reply_to_email_uuid === 'string' ? reply_to_email_uuid : null,
+          email_uuid: externalId?.startsWith('gs_em_') ? externalId.replace(/^gs_em_/, '') : null,
+          attachments:
+            Array.isArray(attachments) && attachments.length > 0
+              ? attachments.map((item) => ({
+                  filename: item.filename,
+                  content_type: item.content_type || null,
+                  size: item.size || null,
+                }))
+              : null,
+        },
         created_at: now,
       })
       .select()

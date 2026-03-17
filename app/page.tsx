@@ -8,6 +8,33 @@ import { MAX_PHONE_NUMBERS, normalizePhoneNumbers } from '@/lib/phones';
 
 type FeedTab = 'today' | 'snoozed' | 'closed';
 type ComposeChannel = 'email' | 'call' | 'linkedin' | 'text' | 'note';
+type EmailComposeMode = 'reply' | 'new';
+
+type SenderProfileOption = {
+  uuid: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  label?: string | null;
+  from_name?: string | null;
+  from_email?: string | null;
+};
+
+type ComposeAttachment = {
+  id: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  contentBase64: string;
+};
+
+type EmailThreadOption = {
+  id: string;
+  subject: string;
+  latestAt: string;
+  senderProfileUuid?: string | null;
+  threadId?: string | null;
+  emailUuid?: string | null;
+};
 
 const STAGE_LABELS: Record<string, string> = {
   lead: 'Lead',
@@ -136,6 +163,32 @@ function normalizeUrl(value: string): string {
   return `https://${trimmed}`;
 }
 
+function extractEmailSubject(content: string): string | null {
+  const match = content.match(/^\*\*(.+?)\*\*(?:\n|$)/);
+  if (!match) return null;
+  return match[1].trim() || null;
+}
+
+function ensureReplySubject(subject: string): string {
+  if (!subject.trim()) return '';
+  if (/^re:\s*/i.test(subject)) return subject.trim();
+  return `Re: ${subject.trim()}`;
+}
+
+function normalizeThreadKey(subject: string): string {
+  return subject.trim().replace(/^re:\s*/i, '').toLowerCase();
+}
+
+function senderProfileLabel(profile: SenderProfileOption): string {
+  const name =
+    profile.from_name ||
+    [profile.first_name, profile.last_name].filter(Boolean).join(' ') ||
+    profile.label ||
+    'Sender';
+  const email = profile.from_email || 'no-email';
+  return `${name} (${email})`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -160,6 +213,13 @@ export default function HomePage() {
   const [snoozedCount, setSnoozedCount] = useState(0);
   const [closedCount, setClosedCount] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [emailComposeMode, setEmailComposeMode] = useState<EmailComposeMode>('reply');
+  const [selectedEmailThreadId, setSelectedEmailThreadId] = useState<string>('');
+  const [senderProfiles, setSenderProfiles] = useState<SenderProfileOption[]>([]);
+  const [selectedSenderProfileUuid, setSelectedSenderProfileUuid] = useState<string>('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailAttachments, setEmailAttachments] = useState<ComposeAttachment[]>([]);
+  const [loadingSenderProfiles, setLoadingSenderProfiles] = useState(false);
   const [editingPhoneIndex, setEditingPhoneIndex] = useState<number | null>(null);
   const [phoneInput, setPhoneInput] = useState('');
   const [savingPhone, setSavingPhone] = useState(false);
@@ -174,6 +234,7 @@ export default function HomePage() {
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const allLeads = useMemo(() => {
     const map = new Map<string, Lead>();
@@ -200,6 +261,52 @@ export default function HomePage() {
     const activities = selectedLeadId ? activitiesByLead[selectedLeadId] || [] : [];
     return activities.filter((activity) => !isRawWebhookPayload(activity.content));
   }, [selectedLeadId, activitiesByLead]);
+  const emailThreads = useMemo(() => {
+    const emailActivities = selectedActivities
+      .filter((activity) => activity.channel === 'email')
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const map = new Map<string, EmailThreadOption>();
+    for (const activity of emailActivities) {
+      const metadata = (activity.metadata || {}) as Record<string, unknown>;
+      const subject = extractEmailSubject(activity.content) || 'No subject';
+      const threadIdFromMetadata =
+        (typeof metadata.thread_id === 'string' && metadata.thread_id) ||
+        (typeof metadata.thread_uuid === 'string' && metadata.thread_uuid) ||
+        (typeof metadata.email_thread_uuid === 'string' && metadata.email_thread_uuid) ||
+        null;
+      const threadKey = threadIdFromMetadata || `subject:${normalizeThreadKey(subject)}`;
+      if (!map.has(threadKey)) {
+        map.set(threadKey, {
+          id: threadKey,
+          subject,
+          latestAt: activity.created_at,
+          senderProfileUuid:
+            typeof metadata.sender_profile_uuid === 'string' ? metadata.sender_profile_uuid : null,
+          threadId: threadIdFromMetadata,
+          emailUuid:
+            typeof metadata.email_uuid === 'string'
+              ? metadata.email_uuid
+              : typeof metadata.external_id === 'string'
+                ? metadata.external_id.replace(/^gs_em_/, '')
+                : null,
+        });
+      } else {
+        const existing = map.get(threadKey)!;
+        if (
+          !existing.senderProfileUuid &&
+          typeof metadata.sender_profile_uuid === 'string' &&
+          metadata.sender_profile_uuid
+        ) {
+          existing.senderProfileUuid = metadata.sender_profile_uuid;
+        }
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime()
+    );
+  }, [selectedActivities]);
 
   const loadLeads = useCallback(async () => {
     const [activeRes, snoozedRes, closedRes] = await Promise.all([
@@ -269,7 +376,68 @@ export default function HomePage() {
     setEditingWebsite(false);
     setWebsiteInput('');
     setSavingWebsite(false);
+    setEmailComposeMode('reply');
+    setSelectedEmailThreadId('');
+    setSelectedSenderProfileUuid('');
+    setEmailSubject('');
+    setEmailAttachments([]);
   }, [selectedLeadId]);
+
+  useEffect(() => {
+    if (composeChannel !== 'email') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingSenderProfiles(true);
+        const response = await fetch('/api/getsales/sender-profiles');
+        const data = await response.json().catch(() => []);
+        if (cancelled) return;
+        const profiles = Array.isArray(data) ? (data as SenderProfileOption[]) : [];
+        setSenderProfiles(profiles);
+      } catch {
+        if (!cancelled) setSenderProfiles([]);
+      } finally {
+        if (!cancelled) setLoadingSenderProfiles(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [composeChannel, selectedLeadId]);
+
+  useEffect(() => {
+    if (composeChannel !== 'email') return;
+    if (emailComposeMode === 'reply' && emailThreads.length === 0) {
+      setEmailComposeMode('new');
+      setSelectedEmailThreadId('');
+      setEmailSubject('');
+      return;
+    }
+    if (emailComposeMode === 'reply' && emailThreads.length > 0) {
+      const current = emailThreads.find((thread) => thread.id === selectedEmailThreadId) || emailThreads[0];
+      if (selectedEmailThreadId !== current.id) {
+        setSelectedEmailThreadId(current.id);
+        setEmailSubject(ensureReplySubject(current.subject));
+      } else if (!emailSubject) {
+        setEmailSubject(ensureReplySubject(current.subject));
+      }
+      if (!selectedSenderProfileUuid) {
+        setSelectedSenderProfileUuid(current.senderProfileUuid || senderProfiles[0]?.uuid || '');
+      }
+    } else if (emailComposeMode === 'new') {
+      if (!selectedSenderProfileUuid && senderProfiles.length > 0) {
+        setSelectedSenderProfileUuid(senderProfiles[0].uuid);
+      }
+    }
+  }, [
+    composeChannel,
+    emailComposeMode,
+    emailThreads,
+    selectedEmailThreadId,
+    senderProfiles,
+    selectedSenderProfileUuid,
+    emailSubject,
+  ]);
 
   useEffect(() => {
     const enrichLeads = tab === 'snoozed' ? snoozedLeads : tab === 'closed' ? closedLeads : [];
@@ -352,6 +520,31 @@ export default function HomePage() {
     setCallNotes('');
   };
 
+  const addAttachments = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const readFile = (file: File) =>
+      new Promise<ComposeAttachment>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+          const contentBase64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : '';
+          resolve({
+            id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+            filename: file.name,
+            contentType: file.type || 'application/octet-stream',
+            size: file.size,
+            contentBase64,
+          });
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+
+    const next = await Promise.all(Array.from(files).map(readFile));
+    setEmailAttachments((prev) => [...prev, ...next]);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+  };
+
   const sendCompose = async () => {
     if (!selectedLead || !selectedLeadId) return;
 
@@ -359,13 +552,29 @@ export default function HomePage() {
     if (!composeText.trim()) return;
 
     if (composeChannel === 'email' || composeChannel === 'linkedin') {
-      const senderProfilesRes = await fetch('/api/getsales/sender-profiles');
-      const senderProfiles = await senderProfilesRes.json();
-      const senderProfileUuid = Array.isArray(senderProfiles) ? senderProfiles[0]?.uuid : null;
+      let availableProfiles = senderProfiles;
+      if (availableProfiles.length === 0) {
+        const senderProfilesRes = await fetch('/api/getsales/sender-profiles');
+        const senderProfilesData = await senderProfilesRes.json().catch(() => []);
+        if (Array.isArray(senderProfilesData)) {
+          availableProfiles = senderProfilesData as SenderProfileOption[];
+          setSenderProfiles(availableProfiles);
+        }
+      }
+      const fallbackSenderUuid = availableProfiles.length > 0 ? availableProfiles[0]?.uuid : null;
+      const senderProfileUuid = selectedSenderProfileUuid || fallbackSenderUuid;
       if (!senderProfileUuid) {
         alert('No sender profile available for sending.');
         return;
       }
+
+      const selectedThread =
+        emailThreads.find((thread) => thread.id === selectedEmailThreadId) || emailThreads[0] || null;
+      const selectedSender = availableProfiles.find((profile) => profile.uuid === senderProfileUuid) || null;
+      const resolvedEmailSubject =
+        emailComposeMode === 'reply'
+          ? ensureReplySubject(selectedThread?.subject || emailSubject || 'Quick follow-up')
+          : (emailSubject.trim() || 'Quick follow-up');
 
       await fetch('/api/messages/reply', {
         method: 'POST',
@@ -375,7 +584,21 @@ export default function HomePage() {
           channel: composeChannel,
           sender_profile_uuid: senderProfileUuid,
           content: composeText.trim(),
-          subject: composeChannel === 'email' ? 'Quick follow-up' : undefined,
+          email_mode: composeChannel === 'email' ? emailComposeMode : undefined,
+          subject: composeChannel === 'email' ? resolvedEmailSubject : undefined,
+          thread_id: composeChannel === 'email' ? selectedThread?.threadId || selectedThread?.id : undefined,
+          reply_to_email_uuid: composeChannel === 'email' ? selectedThread?.emailUuid : undefined,
+          from_name: composeChannel === 'email' ? selectedSender?.from_name : undefined,
+          from_email: composeChannel === 'email' ? selectedSender?.from_email : undefined,
+          attachments:
+            composeChannel === 'email'
+              ? emailAttachments.map((attachment) => ({
+                  filename: attachment.filename,
+                  content_type: attachment.contentType,
+                  content_base64: attachment.contentBase64,
+                  size: attachment.size,
+                }))
+              : undefined,
         }),
       });
     } else {
@@ -392,6 +615,13 @@ export default function HomePage() {
     }
 
     await Promise.all([syncAndLoadActivities(selectedLeadId), loadLeads()]);
+    if (composeChannel === 'email') {
+      setEmailAttachments([]);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+      if (emailComposeMode === 'new') {
+        setEmailSubject('');
+      }
+    }
     completeTask();
   };
 
@@ -847,6 +1077,149 @@ export default function HomePage() {
                       placeholder="Call notes..."
                       className="w-full min-h-20 p-2 text-sm border border-slate-200 rounded-md"
                     />
+                  </div>
+                ) : composeChannel === 'email' ? (
+                  <div className="p-3 space-y-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEmailComposeMode('reply');
+                          const latest = emailThreads[0];
+                          if (latest) {
+                            setSelectedEmailThreadId(latest.id);
+                            setEmailSubject(ensureReplySubject(latest.subject));
+                          }
+                        }}
+                        className={`px-2 py-1 text-xs rounded-md border ${
+                          emailComposeMode === 'reply'
+                            ? 'border-slate-900 text-slate-900 bg-slate-50'
+                            : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                        }`}
+                        disabled={emailThreads.length === 0}
+                      >
+                        Reply to existing thread
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEmailComposeMode('new');
+                          setSelectedEmailThreadId('');
+                          setEmailSubject('');
+                        }}
+                        className={`px-2 py-1 text-xs rounded-md border ${
+                          emailComposeMode === 'new'
+                            ? 'border-slate-900 text-slate-900 bg-slate-50'
+                            : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        New Email
+                      </button>
+                    </div>
+
+                    {emailComposeMode === 'reply' && (
+                      <select
+                        value={selectedEmailThreadId}
+                        onChange={(event) => {
+                          const nextId = event.target.value;
+                          setSelectedEmailThreadId(nextId);
+                          const thread = emailThreads.find((item) => item.id === nextId);
+                          if (thread) {
+                            setEmailSubject(ensureReplySubject(thread.subject));
+                            if (thread.senderProfileUuid) {
+                              setSelectedSenderProfileUuid(thread.senderProfileUuid);
+                            }
+                          }
+                        }}
+                        className="w-full p-2 text-xs border border-slate-200 rounded-md bg-white"
+                      >
+                        {emailThreads.length === 0 ? (
+                          <option value="">No existing threads</option>
+                        ) : (
+                          emailThreads.map((thread) => (
+                            <option key={thread.id} value={thread.id}>
+                              {thread.subject}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    )}
+
+                    <select
+                      value={selectedSenderProfileUuid}
+                      onChange={(event) => setSelectedSenderProfileUuid(event.target.value)}
+                      className="w-full p-2 text-xs border border-slate-200 rounded-md bg-white"
+                      disabled={loadingSenderProfiles}
+                    >
+                      {senderProfiles.length === 0 ? (
+                        <option value="">
+                          {loadingSenderProfiles ? 'Loading sender profiles...' : 'No sender profiles available'}
+                        </option>
+                      ) : (
+                        senderProfiles.map((profile) => (
+                          <option key={profile.uuid} value={profile.uuid}>
+                            {senderProfileLabel(profile)}
+                          </option>
+                        ))
+                      )}
+                    </select>
+
+                    <input
+                      value={emailSubject}
+                      onChange={(event) => setEmailSubject(event.target.value)}
+                      placeholder="Subject"
+                      className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                    />
+                    <textarea
+                      value={composeText}
+                      onChange={(event) => setComposeText(event.target.value)}
+                      placeholder="Write email message..."
+                      className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
+                    />
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <input
+                        ref={attachmentInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          void addAttachments(event.target.files);
+                        }}
+                      />
+                      <button
+                        onClick={() => attachmentInputRef.current?.click()}
+                        className="px-2 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+                      >
+                        Attach file
+                      </button>
+                      {emailAttachments.map((attachment) => (
+                        <span
+                          key={attachment.id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-[11px] text-slate-700"
+                        >
+                          {attachment.filename}
+                          <button
+                            onClick={() => {
+                              setEmailAttachments((prev) =>
+                                prev.filter((item) => item.id !== attachment.id)
+                              );
+                            }}
+                            className="text-slate-500 hover:text-slate-700"
+                            title="Remove attachment"
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        onClick={sendCompose}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                      >
+                        Send
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="p-3">
