@@ -65,6 +65,9 @@ function eventLabel(activity: Activity): string {
 }
 
 function bubbleClass(activity: Activity): string {
+  if (activity.type === 'note' || activity.channel === 'note') {
+    return 'bg-amber-100 border border-amber-200 text-slate-800';
+  }
   if (activity.direction === 'inbound') return 'bg-white border border-slate-200 text-slate-700';
   if (activity.type.startsWith('email')) return 'bg-indigo-50 border border-indigo-100 text-slate-700';
   if (activity.type.startsWith('linkedin')) return 'bg-blue-50 border border-blue-100 text-slate-700';
@@ -777,7 +780,7 @@ export default function HomePage() {
                 {selectedActivities.map((activity) => (
                   <div
                     key={activity.id}
-                    className={`flex ${activity.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
+                    className={`flex ${activity.direction === 'outbound' || activity.type === 'note' || activity.channel === 'note' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div className="max-w-[80%]">
                       <div className="text-[11px] text-slate-400 mb-1 flex items-center gap-1.5">
