@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { fetchMailbox, fetchMailboxes, fetchSenderProfiles, lookupContact, sendEmail, sendLinkedInMessage } from '@/lib/getsales';
 
+function isUuid(value: string | null | undefined): value is string {
+  if (!value) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (!process.env.GETSALES_API_KEY) {
@@ -49,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     let leadUuid = lead.getsales_uuid as string | null;
-    if (!leadUuid) {
+    if (!isUuid(leadUuid)) {
       leadUuid = await lookupContact(lead.linkedin_url, lead.email);
       if (!leadUuid) {
         return NextResponse.json({ error: 'Could not resolve GetSales lead UUID' }, { status: 400 });
