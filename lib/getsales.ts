@@ -409,12 +409,41 @@ export async function sendEmail(params: {
     payload.attachments = attachments;
   }
 
-  const response = await fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(payload),
-  });
-  const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  const executeSend = async (bodyPayload: Record<string, unknown>) =>
+    fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(bodyPayload),
+    });
+
+  let response = await executeSend(payload);
+  let responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const message =
+      (typeof responsePayload.message === 'string' && responsePayload.message) ||
+      (typeof responsePayload.error === 'string' && responsePayload.error) ||
+      '';
+    const shouldRetryWithMinimalPayload =
+      response.status === 422 ||
+      /given data was invalid/i.test(message);
+
+    if (shouldRetryWithMinimalPayload) {
+      const minimalPayload: Record<string, unknown> = {
+        sender_profile_uuid: params.sender_profile_uuid,
+        lead_uuid: params.lead_uuid,
+        from_name: params.from_name,
+        from_email: params.from_email,
+        to_name: params.to_name,
+        to_email: params.to_email,
+        subject: params.subject,
+        body: params.body,
+        cc: [],
+        bcc: [],
+      };
+      response = await executeSend(minimalPayload);
+      responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    }
+  }
   if (!response.ok) {
     const message =
       (typeof responsePayload.message === 'string' && responsePayload.message) ||

@@ -104,6 +104,11 @@ export async function POST(request: NextRequest) {
       }
 
       const emailSubject = subject?.trim() || 'Quick follow-up';
+      const resolvedReplyToUuid =
+        typeof reply_to_email_uuid === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reply_to_email_uuid)
+          ? reply_to_email_uuid
+          : undefined;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter(
             (item) =>
@@ -121,8 +126,7 @@ export async function POST(request: NextRequest) {
         to_email: lead.email,
         subject: emailSubject,
         body: messageText,
-        replied_to_uuid:
-          typeof reply_to_email_uuid === 'string' ? reply_to_email_uuid : undefined,
+        replied_to_uuid: resolvedReplyToUuid,
         attachments: safeAttachments,
       });
       const sentEmailUuid =
