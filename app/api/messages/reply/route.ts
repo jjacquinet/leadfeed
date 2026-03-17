@@ -121,16 +121,15 @@ export async function POST(request: NextRequest) {
         to_email: lead.email,
         subject: emailSubject,
         body: messageText,
-        thread_id: typeof thread_id === 'string' ? thread_id : undefined,
-        reply_to_email_uuid:
+        replied_to_uuid:
           typeof reply_to_email_uuid === 'string' ? reply_to_email_uuid : undefined,
         attachments: safeAttachments,
       });
       const sentEmailUuid =
         typeof result?.uuid === 'string'
           ? result.uuid
-          : typeof result?.data?.uuid === 'string'
-            ? result.data.uuid
+          : typeof (result?.data as Record<string, unknown> | undefined)?.uuid === 'string'
+            ? ((result?.data as Record<string, unknown>).uuid as string)
             : null;
       if (sentEmailUuid) {
         externalId = `gs_em_${sentEmailUuid}`;

@@ -576,7 +576,7 @@ export default function HomePage() {
           ? ensureReplySubject(selectedThread?.subject || emailSubject || 'Quick follow-up')
           : (emailSubject.trim() || 'Quick follow-up');
 
-      await fetch('/api/messages/reply', {
+      const sendResponse = await fetch('/api/messages/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -586,7 +586,7 @@ export default function HomePage() {
           content: composeText.trim(),
           email_mode: composeChannel === 'email' ? emailComposeMode : undefined,
           subject: composeChannel === 'email' ? resolvedEmailSubject : undefined,
-          thread_id: composeChannel === 'email' ? selectedThread?.threadId || selectedThread?.id : undefined,
+          thread_id: composeChannel === 'email' ? selectedThread?.threadId : undefined,
           reply_to_email_uuid: composeChannel === 'email' ? selectedThread?.emailUuid : undefined,
           from_name: composeChannel === 'email' ? selectedSender?.from_name : undefined,
           from_email: composeChannel === 'email' ? selectedSender?.from_email : undefined,
@@ -601,6 +601,17 @@ export default function HomePage() {
               : undefined,
         }),
       });
+      if (!sendResponse.ok) {
+        const errorPayload = await sendResponse.json().catch(() => ({}));
+        const message =
+          typeof errorPayload?.message === 'string'
+            ? errorPayload.message
+            : typeof errorPayload?.error === 'string'
+              ? errorPayload.error
+              : 'Failed to send message';
+        alert(message);
+        return;
+      }
     } else {
       const type = composeChannel === 'text' ? 'text_sent' : 'note';
       await fetch('/api/activities', {

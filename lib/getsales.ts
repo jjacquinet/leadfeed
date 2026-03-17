@@ -371,15 +371,14 @@ export async function sendEmail(params: {
   to_email: string;
   subject: string;
   body: string;
-  thread_id?: string;
-  reply_to_email_uuid?: string;
+  replied_to_uuid?: string;
   attachments?: Array<{
     filename: string;
     content_type?: string;
     content_base64: string;
     size?: number;
   }>;
-}) {
+}): Promise<Record<string, unknown>> {
   const attachments = (params.attachments || []).map((attachment) => ({
     filename: attachment.filename,
     name: attachment.filename,
@@ -390,24 +389,38 @@ export async function sendEmail(params: {
     size: attachment.size || undefined,
   }));
 
+  const payload: Record<string, unknown> = {
+    sender_profile_uuid: params.sender_profile_uuid,
+    lead_uuid: params.lead_uuid,
+    from_name: params.from_name,
+    from_email: params.from_email,
+    to_name: params.to_name,
+    to_email: params.to_email,
+    subject: params.subject,
+    body: params.body,
+    cc: [],
+    bcc: [],
+  };
+
+  if (params.replied_to_uuid) {
+    payload.replied_to_uuid = params.replied_to_uuid;
+  }
+  if (attachments.length > 0) {
+    payload.attachments = attachments;
+  }
+
   const response = await fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({
-      ...params,
-      thread_id: params.thread_id || undefined,
-      email_thread_uuid: params.thread_id || undefined,
-      reply_to_email_uuid: params.reply_to_email_uuid || undefined,
-      parent_email_uuid: params.reply_to_email_uuid || undefined,
-      attachments,
-      files: attachments,
-      cc: [],
-      bcc: [],
-    }),
+    body: JSON.stringify(payload),
   });
-  const payload = await response.json().catch(() => ({}));
+  const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `Email send failed (${response.status})`);
+    const message =
+      (typeof responsePayload.message === 'string' && responsePayload.message) ||
+      (typeof responsePayload.error === 'string' && responsePayload.error) ||
+      `Email send failed (${response.status})`;
+    throw new Error(message);
   }
-  return payload;
+  return responsePayload;
 }
