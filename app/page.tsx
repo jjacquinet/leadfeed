@@ -36,6 +36,17 @@ type EmailThreadOption = {
   emailUuid?: string | null;
 };
 
+type AddLeadForm = {
+  first_name: string;
+  last_name: string;
+  title: string;
+  company: string;
+  company_website: string;
+  linkedin_url: string;
+  email: string;
+  phone: string;
+};
+
 const STAGE_LABELS: Record<string, string> = {
   lead: 'Lead',
   conversation: 'Conversation',
@@ -213,6 +224,18 @@ export default function HomePage() {
   const [snoozedCount, setSnoozedCount] = useState(0);
   const [closedCount, setClosedCount] = useState(0);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [addingLead, setAddingLead] = useState(false);
+  const [addLeadForm, setAddLeadForm] = useState<AddLeadForm>({
+    first_name: '',
+    last_name: '',
+    title: '',
+    company: '',
+    company_website: '',
+    linkedin_url: '',
+    email: '',
+    phone: '',
+  });
   const [emailComposeMode, setEmailComposeMode] = useState<EmailComposeMode>('reply');
   const [selectedEmailThreadId, setSelectedEmailThreadId] = useState<string>('');
   const [senderProfiles, setSenderProfiles] = useState<SenderProfileOption[]>([]);
@@ -818,6 +841,61 @@ export default function HomePage() {
     }
   };
 
+  const resetAddLeadForm = () => {
+    setAddLeadForm({
+      first_name: '',
+      last_name: '',
+      title: '',
+      company: '',
+      company_website: '',
+      linkedin_url: '',
+      email: '',
+      phone: '',
+    });
+  };
+
+  const submitAddLead = async () => {
+    const firstName = addLeadForm.first_name.trim();
+    const lastName = addLeadForm.last_name.trim();
+    if (!firstName || !lastName || addingLead) return;
+
+    try {
+      setAddingLead(true);
+      const response = await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...addLeadForm,
+          first_name: firstName,
+          last_name: lastName,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' ? payload.error : 'Failed to create lead';
+        alert(message);
+        return;
+      }
+
+      await loadLeads();
+      setShowAddLeadModal(false);
+      resetAddLeadForm();
+      setTab('today');
+      if (payload?.id) {
+        setSelectedLeadId(payload.id as string);
+      }
+      setComposeChannel('email');
+      setComposeText('');
+      setShowSnoozeBar(false);
+    } catch (error) {
+      console.error('Failed to create lead:', error);
+      alert('Failed to create lead.');
+    } finally {
+      setAddingLead(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-500">
@@ -846,6 +924,12 @@ export default function HomePage() {
               className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
             >
               {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+            <button
+              onClick={() => setShowAddLeadModal(true)}
+              className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+            >
+              Add Lead
             </button>
           </div>
         </div>
@@ -1541,6 +1625,106 @@ export default function HomePage() {
                 className="px-3 py-1.5 text-xs rounded-md border border-rose-200 bg-rose-600 text-white hover:bg-rose-700"
               >
                 Close Lead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showAddLeadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-xl border border-slate-200">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="text-base font-semibold text-slate-900">Add Lead</h3>
+              <p className="mt-1 text-sm text-slate-500">Create a lead for today&apos;s queue.</p>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  value={addLeadForm.first_name}
+                  onChange={(event) =>
+                    setAddLeadForm((prev) => ({ ...prev, first_name: event.target.value }))
+                  }
+                  placeholder="First Name *"
+                  className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                />
+                <input
+                  value={addLeadForm.last_name}
+                  onChange={(event) =>
+                    setAddLeadForm((prev) => ({ ...prev, last_name: event.target.value }))
+                  }
+                  placeholder="Last Name *"
+                  className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                />
+              </div>
+              <input
+                value={addLeadForm.title}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, title: event.target.value }))
+                }
+                placeholder="Title"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+              <input
+                value={addLeadForm.company}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, company: event.target.value }))
+                }
+                placeholder="Company"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+              <input
+                value={addLeadForm.company_website}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, company_website: event.target.value }))
+                }
+                placeholder="Company Website"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+              <input
+                value={addLeadForm.linkedin_url}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, linkedin_url: event.target.value }))
+                }
+                placeholder="LinkedIn Profile URL"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+              <input
+                value={addLeadForm.email}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, email: event.target.value }))
+                }
+                placeholder="Email"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+              <input
+                value={addLeadForm.phone}
+                onChange={(event) =>
+                  setAddLeadForm((prev) => ({ ...prev, phone: event.target.value }))
+                }
+                placeholder="Phone"
+                className="w-full p-2 text-sm border border-slate-200 rounded-md"
+              />
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowAddLeadModal(false);
+                  resetAddLeadForm();
+                }}
+                className="px-3 py-1.5 text-xs rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitAddLead}
+                disabled={
+                  addingLead ||
+                  !addLeadForm.first_name.trim() ||
+                  !addLeadForm.last_name.trim()
+                }
+                className="px-3 py-1.5 text-xs rounded-md border border-slate-900 bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50"
+              >
+                {addingLead ? 'Creating...' : 'Create Lead'}
               </button>
             </div>
           </div>

@@ -205,3 +205,97 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
+export async function POST(request: NextRequest) {
+  try {
+    const supabase = getSupabase();
+    const body = await request.json();
+
+    const firstName = typeof body.first_name === 'string' ? body.first_name.trim() : '';
+    const lastName = typeof body.last_name === 'string' ? body.last_name.trim() : '';
+    const title = typeof body.title === 'string' ? body.title.trim() : null;
+    const company = typeof body.company === 'string' ? body.company.trim() : null;
+    const companyWebsite =
+      typeof body.company_website === 'string' ? body.company_website.trim() : null;
+    const linkedinUrl =
+      typeof body.linkedin_url === 'string' ? body.linkedin_url.trim() : null;
+    const email = typeof body.email === 'string' ? body.email.trim() : null;
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : null;
+
+    if (!firstName || !lastName) {
+      return NextResponse.json(
+        { error: 'Missing required fields: first_name, last_name' },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const phoneNumbers = normalizePhoneNumbers(phone ? [phone] : []);
+
+    const newLead = {
+      first_name: firstName,
+      last_name: lastName,
+      name: `${firstName} ${lastName}`.trim(),
+      title: title || null,
+      company: company || null,
+      company_website: companyWebsite || null,
+      linkedin_url: linkedinUrl || null,
+      email: email || null,
+      phone: primaryPhoneFromList(phoneNumbers),
+      phone_numbers: phoneNumbers,
+      status: 'active',
+      has_unread: false,
+      stage: 'lead_feed',
+      snooze_until: null,
+      snoozed_until: null,
+      closed_at: null,
+      created_at: now,
+      updated_at: now,
+      last_activity: now,
+      last_activity_at: now,
+    };
+
+    let { data, error } = await supabase
+      .from('leads')
+      .insert(newLead)
+      .select()
+      .single();
+
+    // Legacy fallback for environments missing newer columns.
+    if (error) {
+      const legacyLead = {
+        first_name: firstName,
+        last_name: lastName,
+        title: title || null,
+        company: company || null,
+        company_website: companyWebsite || null,
+        linkedin_url: linkedinUrl || null,
+        email: email || null,
+        phone: phone || null,
+        stage: 'lead_feed',
+        snoozed_until: null,
+        created_at: now,
+        updated_at: now,
+        last_activity: now,
+      };
+
+      const legacyResult = await supabase
+        .from('leads')
+        .insert(legacyLead)
+        .select()
+        .single();
+      data = legacyResult.data;
+      error = legacyResult.error;
+    }
+
+    if (error) {
+      console.error('Error creating lead:', error);
+      return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 });
+    }
+
+    return NextResponse.json(data, { status: 201 });
+  } catch (error) {
+    console.error('Error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
