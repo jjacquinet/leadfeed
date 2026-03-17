@@ -83,21 +83,22 @@ export async function POST(request: NextRequest) {
       let resolvedFromEmail = typeof body.from_email === 'string' ? body.from_email.trim() : '';
       let resolvedFromName = typeof body.from_name === 'string' ? body.from_name.trim() : '';
 
-      if (!resolvedFromEmail) {
-        const [senderProfiles, mailboxes] = await Promise.all([fetchSenderProfiles(), fetchMailboxes()]);
-        const selectedProfile = senderProfiles.find((profile) => profile.uuid === sender_profile_uuid);
-        const mailboxBySenderProfileUuid = new Map(mailboxes
-          .filter((mailbox) => mailbox.sender_profile_uuid)
-          .map((mailbox) => [mailbox.sender_profile_uuid as string, mailbox]));
+      const [senderProfiles, mailboxes] = await Promise.all([fetchSenderProfiles(), fetchMailboxes()]);
+      const selectedProfile = senderProfiles.find((profile) => profile.uuid === sender_profile_uuid);
+      const mailboxBySenderProfileUuid = new Map(mailboxes
+        .filter((mailbox) => mailbox.sender_profile_uuid)
+        .map((mailbox) => [mailbox.sender_profile_uuid as string, mailbox]));
 
-        let mailbox = mailboxBySenderProfileUuid.get(sender_profile_uuid);
-        if (!mailbox && selectedProfile?.mailbox_uuid) {
-          mailbox = mailboxes.find((candidate) => candidate.uuid === selectedProfile.mailbox_uuid);
-          if (!mailbox) {
-            mailbox = await fetchMailbox(selectedProfile.mailbox_uuid) ?? undefined;
-          }
+      let mailbox = mailboxBySenderProfileUuid.get(sender_profile_uuid);
+      if (!mailbox && selectedProfile?.mailbox_uuid) {
+        mailbox = mailboxes.find((candidate) => candidate.uuid === selectedProfile.mailbox_uuid);
+        if (!mailbox) {
+          mailbox = await fetchMailbox(selectedProfile.mailbox_uuid) ?? undefined;
         }
+      }
+      const resolvedMailboxUuid = mailbox?.uuid || selectedProfile?.mailbox_uuid || undefined;
 
+      if (!resolvedFromEmail) {
         resolvedFromEmail = mailbox?.email?.trim() || '';
         if (!resolvedFromName) {
           resolvedFromName = mailbox?.sender_name?.trim() || '';
@@ -131,6 +132,7 @@ export async function POST(request: NextRequest) {
         to_email: lead.email,
         subject: emailSubject,
         body: messageText,
+        mailbox_uuid: resolvedMailboxUuid,
         replied_to_uuid: resolvedReplyToUuid,
         attachments: safeAttachments,
       });
@@ -139,6 +141,8 @@ export async function POST(request: NextRequest) {
           ? result.uuid
           : typeof (result?.data as Record<string, unknown> | undefined)?.uuid === 'string'
             ? ((result?.data as Record<string, unknown>).uuid as string)
+            : typeof (result?.emailDomain as Record<string, unknown> | undefined)?.uuid === 'string'
+              ? ((result?.emailDomain as Record<string, unknown>).uuid as string)
             : null;
       if (sentEmailUuid) {
         externalId = `gs_em_${sentEmailUuid}`;
