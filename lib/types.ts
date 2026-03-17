@@ -10,6 +10,8 @@ export type MessageDirection = 'inbound' | 'outbound' | 'internal';
 export type ActivityType =
   | 'email_sent'
   | 'email_received'
+  | 'connection_request_sent'
+  | 'connection_request_accepted'
   | 'linkedin_sent'
   | 'linkedin_received'
   | 'call'

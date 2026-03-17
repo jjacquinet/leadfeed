@@ -4,6 +4,7 @@ import { ActivityType } from '@/lib/types';
 
 function inferChannel(type: ActivityType): 'email' | 'linkedin' | 'call' | 'text' | 'note' {
   if (type.startsWith('email')) return 'email';
+  if (type.startsWith('connection_request')) return 'linkedin';
   if (type.startsWith('linkedin')) return 'linkedin';
   if (type.startsWith('text')) return 'text';
   if (type === 'call') return 'call';
@@ -11,6 +12,8 @@ function inferChannel(type: ActivityType): 'email' | 'linkedin' | 'call' | 'text
 }
 
 function inferDirection(type: ActivityType): 'inbound' | 'outbound' | 'internal' {
+  if (type === 'connection_request_accepted') return 'inbound';
+  if (type === 'connection_request_sent') return 'outbound';
   if (type.endsWith('_received')) return 'inbound';
   if (type === 'note') return 'internal';
   return 'outbound';

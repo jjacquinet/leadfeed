@@ -92,6 +92,8 @@ function eventLabel(activity: Activity): string {
   const map: Record<string, string> = {
     email_sent: 'You sent email',
     email_received: 'Received email',
+    connection_request_sent: 'Connection request sent',
+    connection_request_accepted: 'Connection request accepted',
     linkedin_sent: 'You sent LinkedIn',
     linkedin_received: 'Received LinkedIn',
     call: 'Call',
@@ -108,7 +110,7 @@ function bubbleClass(activity: Activity): string {
   }
   if (activity.direction === 'inbound') return 'bg-white border border-slate-200 text-slate-700';
   if (activity.type.startsWith('email')) return 'bg-indigo-50 border border-indigo-100 text-slate-700';
-  if (activity.type.startsWith('linkedin')) return 'bg-blue-50 border border-blue-100 text-slate-700';
+  if (activity.type.startsWith('linkedin') || activity.type.startsWith('connection_request') || activity.channel === 'linkedin') return 'bg-blue-50 border border-blue-100 text-slate-700';
   if (activity.type.startsWith('text')) return 'bg-violet-50 border border-violet-100 text-slate-700';
   if (activity.type === 'call') return 'bg-amber-50 border border-amber-100 text-slate-700';
   return 'bg-slate-50 border border-slate-200 text-slate-700';
