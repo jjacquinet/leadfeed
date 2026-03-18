@@ -17,6 +17,9 @@ type SenderProfileOption = {
   label?: string | null;
   from_name?: string | null;
   from_email?: string | null;
+  linkedin_account_uuid?: string | null;
+  linkedin_identity?: string | null;
+  linkedin_profile_url?: string | null;
 };
 
 type ComposeAttachment = {
@@ -202,6 +205,21 @@ function senderProfileLabel(profile: SenderProfileOption): string {
   return `${name} (${email})`;
 }
 
+function linkedInSenderProfileLabel(profile: SenderProfileOption): string {
+  const name =
+    profile.from_name ||
+    [profile.first_name, profile.last_name].filter(Boolean).join(' ') ||
+    profile.label ||
+    'Sender';
+  const identity =
+    profile.linkedin_identity ||
+    (typeof profile.linkedin_profile_url === 'string'
+      ? profile.linkedin_profile_url.match(/linkedin\.com\/in\/([^/?#]+)/i)?.[1] || null
+      : null) ||
+    'LinkedIn';
+  return `${name} (${identity})`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -247,6 +265,9 @@ export default function HomePage() {
   const [emailSubject, setEmailSubject] = useState('');
   const [emailAttachments, setEmailAttachments] = useState<ComposeAttachment[]>([]);
   const [loadingSenderProfiles, setLoadingSenderProfiles] = useState(false);
+  const [linkedInSenderProfiles, setLinkedInSenderProfiles] = useState<SenderProfileOption[]>([]);
+  const [selectedLinkedInSenderProfileUuid, setSelectedLinkedInSenderProfileUuid] = useState<string>('');
+  const [loadingLinkedInSenderProfiles, setLoadingLinkedInSenderProfiles] = useState(false);
   const [editingPhoneIndex, setEditingPhoneIndex] = useState<number | null>(null);
   const [phoneInput, setPhoneInput] = useState('');
   const [savingPhone, setSavingPhone] = useState(false);
@@ -334,6 +355,22 @@ export default function HomePage() {
       (a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime()
     );
   }, [selectedActivities]);
+  const preferredLinkedInSenderProfileUuid = useMemo(() => {
+    const outboundLinkedInActivities = selectedActivities.filter(
+      (activity) =>
+        activity.direction === 'outbound' &&
+        (activity.channel === 'linkedin' ||
+          activity.type === 'linkedin_sent' ||
+          activity.type === 'connection_request_sent')
+    );
+    for (const activity of outboundLinkedInActivities) {
+      const metadata = (activity.metadata || {}) as Record<string, unknown>;
+      if (typeof metadata.sender_profile_uuid === 'string' && metadata.sender_profile_uuid) {
+        return metadata.sender_profile_uuid;
+      }
+    }
+    return null;
+  }, [selectedActivities]);
 
   const loadLeads = useCallback(async () => {
     const [activeRes, snoozedRes, closedRes] = await Promise.all([
@@ -406,6 +443,7 @@ export default function HomePage() {
     setEmailComposeMode('reply');
     setSelectedEmailThreadId('');
     setSelectedSenderProfileUuid('');
+    setSelectedLinkedInSenderProfileUuid('');
     setEmailSubject('');
     setEmailAttachments([]);
   }, [selectedLeadId]);
@@ -425,6 +463,28 @@ export default function HomePage() {
         if (!cancelled) setSenderProfiles([]);
       } finally {
         if (!cancelled) setLoadingSenderProfiles(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [composeChannel, selectedLeadId]);
+
+  useEffect(() => {
+    if (composeChannel !== 'linkedin') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingLinkedInSenderProfiles(true);
+        const response = await fetch('/api/getsales/sender-profiles?channel=linkedin');
+        const data = await response.json().catch(() => []);
+        if (cancelled) return;
+        const profiles = Array.isArray(data) ? (data as SenderProfileOption[]) : [];
+        setLinkedInSenderProfiles(profiles);
+      } catch {
+        if (!cancelled) setLinkedInSenderProfiles([]);
+      } finally {
+        if (!cancelled) setLoadingLinkedInSenderProfiles(false);
       }
     })();
     return () => {
@@ -464,6 +524,25 @@ export default function HomePage() {
     senderProfiles,
     selectedSenderProfileUuid,
     emailSubject,
+  ]);
+
+  useEffect(() => {
+    if (composeChannel !== 'linkedin') return;
+    if (linkedInSenderProfiles.length === 0) return;
+    if (selectedLinkedInSenderProfileUuid) return;
+
+    const preferred = preferredLinkedInSenderProfileUuid;
+    const preferredIsAvailable = preferred
+      ? linkedInSenderProfiles.some((profile) => profile.uuid === preferred)
+      : false;
+    setSelectedLinkedInSenderProfileUuid(
+      preferredIsAvailable ? (preferred as string) : linkedInSenderProfiles[0].uuid
+    );
+  }, [
+    composeChannel,
+    linkedInSenderProfiles,
+    preferredLinkedInSenderProfileUuid,
+    selectedLinkedInSenderProfileUuid,
   ]);
 
   useEffect(() => {
@@ -579,17 +658,28 @@ export default function HomePage() {
     if (!composeText.trim()) return;
 
     if (composeChannel === 'email' || composeChannel === 'linkedin') {
-      let availableProfiles = senderProfiles;
+      const senderProfilesEndpoint =
+        composeChannel === 'linkedin'
+          ? '/api/getsales/sender-profiles?channel=linkedin'
+          : '/api/getsales/sender-profiles';
+      let availableProfiles = composeChannel === 'linkedin' ? linkedInSenderProfiles : senderProfiles;
       if (availableProfiles.length === 0) {
-        const senderProfilesRes = await fetch('/api/getsales/sender-profiles');
+        const senderProfilesRes = await fetch(senderProfilesEndpoint);
         const senderProfilesData = await senderProfilesRes.json().catch(() => []);
         if (Array.isArray(senderProfilesData)) {
           availableProfiles = senderProfilesData as SenderProfileOption[];
-          setSenderProfiles(availableProfiles);
+          if (composeChannel === 'linkedin') {
+            setLinkedInSenderProfiles(availableProfiles);
+          } else {
+            setSenderProfiles(availableProfiles);
+          }
         }
       }
       const fallbackSenderUuid = availableProfiles.length > 0 ? availableProfiles[0]?.uuid : null;
-      const senderProfileUuid = selectedSenderProfileUuid || fallbackSenderUuid;
+      const senderProfileUuid =
+        composeChannel === 'linkedin'
+          ? selectedLinkedInSenderProfileUuid || fallbackSenderUuid
+          : selectedSenderProfileUuid || fallbackSenderUuid;
       if (!senderProfileUuid) {
         alert('No sender profile available for sending.');
         return;
@@ -1365,6 +1455,41 @@ export default function HomePage() {
                       ))}
                     </div>
 
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        onClick={sendCompose}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                ) : composeChannel === 'linkedin' ? (
+                  <div className="p-3 space-y-2">
+                    <select
+                      value={selectedLinkedInSenderProfileUuid}
+                      onChange={(event) => setSelectedLinkedInSenderProfileUuid(event.target.value)}
+                      className="w-full p-2 text-xs border border-slate-200 rounded-md bg-white"
+                      disabled={loadingLinkedInSenderProfiles}
+                    >
+                      {linkedInSenderProfiles.length === 0 ? (
+                        <option value="">
+                          {loadingLinkedInSenderProfiles ? 'Loading LinkedIn senders...' : 'No LinkedIn sender profiles available'}
+                        </option>
+                      ) : (
+                        linkedInSenderProfiles.map((profile) => (
+                          <option key={profile.uuid} value={profile.uuid}>
+                            {linkedInSenderProfileLabel(profile)}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    <textarea
+                      value={composeText}
+                      onChange={(event) => setComposeText(event.target.value)}
+                      placeholder="Write linkedin message..."
+                      className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
+                    />
                     <div className="mt-2 flex justify-end">
                       <button
                         onClick={sendCompose}

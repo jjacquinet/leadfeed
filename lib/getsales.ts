@@ -66,6 +66,17 @@ export interface GetSalesMailbox {
   status?: string | null;
 }
 
+export interface GetSalesLinkedInAccount {
+  uuid: string;
+  name?: string | null;
+  full_name?: string | null;
+  username?: string | null;
+  public_identifier?: string | null;
+  profile_url?: string | null;
+  linkedin_url?: string | null;
+  [key: string]: any;
+}
+
 /**
  * Look up a contact in GetSales.io by LinkedIn URL or email.
  * Returns the GetSales UUID if found.
@@ -343,6 +354,32 @@ export async function fetchMailboxes(): Promise<GetSalesMailbox[]> {
     console.error('[getsales] Error fetching mailboxes list:', error);
     return [];
   }
+}
+
+export async function fetchLinkedInAccount(accountUuid: string): Promise<GetSalesLinkedInAccount | null> {
+  const candidatePaths = [
+    `/flows/api/linkedin-accounts/${accountUuid}`,
+    `/flows/api/linkedin-account/${accountUuid}`,
+    `/linkedin/api/accounts/${accountUuid}`,
+    `/linkedin/api/linkedin-accounts/${accountUuid}`,
+  ];
+
+  for (const path of candidatePaths) {
+    try {
+      const url = new URL(path, GETSALES_BASE_URL);
+      const response = await fetch(url.toString(), { headers: getHeaders() });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const data = (payload?.data || payload) as GetSalesLinkedInAccount;
+      if (data && typeof data === 'object') {
+        return data;
+      }
+    } catch {
+      // Try next endpoint shape.
+    }
+  }
+
+  return null;
 }
 
 export async function sendLinkedInMessage(params: {
