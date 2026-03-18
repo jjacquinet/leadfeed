@@ -23,6 +23,10 @@ export interface GetSalesLinkedInMessage {
   read_at: string | null;
   status: string;
   lead_uuid: string;
+  sender_profile_uuid?: string | null;
+  sender_profile_name?: string | null;
+  sender_profile_identity?: string | null;
+  linkedin_identity?: string | null;
 }
 
 export interface GetSalesEmail {
@@ -45,6 +49,10 @@ export interface GetSalesEmail {
   emailBody?: { body?: string; content?: string } | null;
   email_body_domain?: { body?: string; content?: string } | null;
   emailBodyDomain?: { body?: string; content?: string } | null;
+  sender_profile_uuid?: string | null;
+  sender_profile_name?: string | null;
+  from_name?: string | null;
+  from_email?: string | null;
   [key: string]: any;
 }
 

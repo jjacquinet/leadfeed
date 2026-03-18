@@ -58,6 +58,9 @@ export async function POST(request: NextRequest) {
       channel,
       direction,
       content,
+      sender_profile_id,
+      sender_profile_name,
+      sender_profile_identity,
       metadata,
       created_at,
     } = body as {
@@ -66,6 +69,9 @@ export async function POST(request: NextRequest) {
       channel?: 'email' | 'linkedin' | 'call' | 'text' | 'note';
       direction?: 'inbound' | 'outbound' | 'internal';
       content?: string;
+      sender_profile_id?: string;
+      sender_profile_name?: string;
+      sender_profile_identity?: string;
       metadata?: Record<string, unknown>;
       created_at?: string;
     };
@@ -89,6 +95,9 @@ export async function POST(request: NextRequest) {
         channel: resolvedChannel,
         direction: resolvedDirection,
         content,
+        sender_profile_id: sender_profile_id ?? null,
+        sender_profile_name: sender_profile_name ?? null,
+        sender_profile_identity: sender_profile_identity ?? null,
         metadata: metadata ?? null,
         created_at: createdAt,
       })

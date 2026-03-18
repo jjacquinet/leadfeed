@@ -19,7 +19,7 @@ function deepGet(obj: any, ...keys: string[]): string | undefined {
   }
 
   // Then check one level of common wrapper keys
-  const wrappers = ['contact', 'data', 'lead', 'person', 'prospect', 'payload', 'body', 'record'];
+  const wrappers = ['contact', 'data', 'lead', 'person', 'prospect', 'payload', 'body', 'record', 'sender_profile', 'senderProfile', 'account', 'mailbox'];
   for (const w of wrappers) {
     if (obj[w] && typeof obj[w] === 'object' && !Array.isArray(obj[w])) {
       for (const k of keys) {
@@ -66,7 +66,14 @@ function normalizePayload(raw: any) {
     'Position', 'role', 'headline', 'Headline');
 
   // Messages
-  let messages: { direction: string; content: string; timestamp?: string }[] = [];
+  let messages: {
+    direction: string;
+    content: string;
+    timestamp?: string;
+    sender_profile_id?: string | null;
+    sender_profile_name?: string | null;
+    sender_profile_identity?: string | null;
+  }[] = [];
   const rawMessages =
     raw.messages ||
     raw.conversation ||
@@ -89,6 +96,17 @@ function normalizePayload(raw: any) {
         })(),
         content: String(msg.content || msg.text || msg.body || msg.message),
         timestamp: msg.timestamp || msg.date || msg.sent_at || msg.created_at,
+        sender_profile_id:
+          msg.sender_profile_uuid || msg.sender_profile_id || msg.senderProfileUuid || msg.senderProfileId || null,
+        sender_profile_name:
+          msg.sender_profile_name || msg.sender_name || msg.from_name || msg.profile_name || null,
+        sender_profile_identity:
+          msg.sender_profile_identity
+          || msg.from_email
+          || msg.sender_email
+          || msg.linkedin_identity
+          || msg.linkedin_handle
+          || null,
       }));
   } else if (raw.message || raw.last_message || raw.conversation_text) {
     const content = raw.message || raw.last_message || raw.conversation_text;
@@ -341,8 +359,14 @@ export async function POST(request: NextRequest) {
             channel: normalizedChannel,
             direction,
             content: eventContent,
+            sender_profile_id: msg.sender_profile_id || null,
+            sender_profile_name: msg.sender_profile_name || null,
+            sender_profile_identity: msg.sender_profile_identity || null,
             metadata: {
               source: 'getsales_webhook',
+              sender_profile_uuid: msg.sender_profile_id || null,
+              sender_profile_name: msg.sender_profile_name || null,
+              sender_profile_identity: msg.sender_profile_identity || null,
               ...(maybeEmail
                 ? {
                     raw_content: msg.content,
@@ -467,8 +491,14 @@ export async function POST(request: NextRequest) {
           channel,
           direction,
           content: eventContent,
+          sender_profile_id: msg.sender_profile_id || null,
+          sender_profile_name: msg.sender_profile_name || null,
+          sender_profile_identity: msg.sender_profile_identity || null,
           metadata: {
             source: 'getsales_webhook',
+            sender_profile_uuid: msg.sender_profile_id || null,
+            sender_profile_name: msg.sender_profile_name || null,
+            sender_profile_identity: msg.sender_profile_identity || null,
             ...(maybeEmail
               ? {
                   raw_content: msg.content,

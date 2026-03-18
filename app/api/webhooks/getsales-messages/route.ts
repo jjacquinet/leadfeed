@@ -57,7 +57,7 @@ function deepGet(obj: unknown, ...keys: string[]): string | null {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
 
-  const wrappers = ['data', 'payload', 'contact', 'lead', 'person', 'record'];
+  const wrappers = ['data', 'payload', 'contact', 'lead', 'person', 'record', 'sender_profile', 'senderProfile', 'account', 'mailbox'];
   for (const wrapper of wrappers) {
     const nested = root[wrapper];
     if (!nested || typeof nested !== 'object' || Array.isArray(nested)) continue;
@@ -81,6 +81,42 @@ function subtractSeconds(iso: string, seconds: number): string {
 
 function addSeconds(iso: string, seconds: number): string {
   return new Date(new Date(iso).getTime() + seconds * 1000).toISOString();
+}
+
+function parseSenderContext(payload: unknown) {
+  const senderProfileId = deepGet(
+    payload,
+    'sender_profile_uuid',
+    'sender_profile_id',
+    'senderProfileUuid',
+    'senderProfileId',
+    'profile_uuid'
+  );
+  const senderProfileName = deepGet(
+    payload,
+    'sender_profile_name',
+    'sender_name',
+    'from_name',
+    'profile_name',
+    'senderProfileName'
+  );
+  const senderProfileIdentity = deepGet(
+    payload,
+    'sender_profile_identity',
+    'from_email',
+    'sender_email',
+    'email_from',
+    'linkedin_identity',
+    'linkedin_handle',
+    'linkedin_username',
+    'public_identifier'
+  );
+
+  return {
+    senderProfileId,
+    senderProfileName,
+    senderProfileIdentity,
+  };
 }
 
 async function parseBody(request: NextRequest): Promise<unknown> {
@@ -123,6 +159,7 @@ export async function POST(request: NextRequest) {
     const content =
       deepGet(payload, 'content', 'message', 'body', 'text', 'message_text') ||
       mapping.fallbackContent;
+    const { senderProfileId, senderProfileName, senderProfileIdentity } = parseSenderContext(payload);
     const timestamp = parseTimestamp(
       deepGet(payload, 'timestamp', 'created_at', 'sent_at', 'occurred_at', 'event_time')
     );
@@ -173,6 +210,9 @@ export async function POST(request: NextRequest) {
     const metadata: Record<string, unknown> = {
       source: 'getsales_messages_webhook',
       event_type: eventName,
+      sender_profile_uuid: senderProfileId,
+      sender_profile_name: senderProfileName,
+      sender_profile_identity: senderProfileIdentity,
     };
     const externalId = deepGet(payload, 'uuid', 'event_id', 'message_uuid', 'id');
     if (externalId) metadata.external_id = externalId;
@@ -183,6 +223,9 @@ export async function POST(request: NextRequest) {
       channel: mapping.channel,
       direction: mapping.direction,
       content,
+      sender_profile_id: senderProfileId,
+      sender_profile_name: senderProfileName,
+      sender_profile_identity: senderProfileIdentity,
       created_at: timestamp,
       metadata,
     });

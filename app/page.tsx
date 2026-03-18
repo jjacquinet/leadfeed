@@ -220,6 +220,24 @@ function linkedInSenderProfileLabel(profile: SenderProfileOption): string {
   return `${name} (${identity})`;
 }
 
+function activitySenderLabel(activity: Activity): string | null {
+  const metadata = (activity.metadata || {}) as Record<string, unknown>;
+  const senderName =
+    activity.sender_profile_name ||
+    (typeof metadata.sender_profile_name === 'string' ? metadata.sender_profile_name : null) ||
+    (typeof metadata.from_name === 'string' ? metadata.from_name : null) ||
+    null;
+  const identity =
+    activity.sender_profile_identity ||
+    (typeof metadata.sender_profile_identity === 'string' ? metadata.sender_profile_identity : null) ||
+    (typeof metadata.from_email === 'string' ? metadata.from_email : null) ||
+    null;
+
+  if (!senderName && !identity) return null;
+  if (senderName && identity) return `via ${senderName} (${identity})`;
+  return `via ${senderName || identity}`;
+}
+
 function getMostRecentNote(activities: Activity[]): string | null {
   for (let i = activities.length - 1; i >= 0; i -= 1) {
     const activity = activities[i];
@@ -688,6 +706,18 @@ export default function HomePage() {
       const selectedThread =
         emailThreads.find((thread) => thread.id === selectedEmailThreadId) || emailThreads[0] || null;
       const selectedSender = availableProfiles.find((profile) => profile.uuid === senderProfileUuid) || null;
+      const resolvedSenderProfileName =
+        selectedSender?.from_name
+        || [selectedSender?.first_name, selectedSender?.last_name].filter(Boolean).join(' ').trim()
+        || selectedSender?.label
+        || '';
+      const resolvedSenderProfileIdentity =
+        composeChannel === 'email'
+          ? selectedSender?.from_email || ''
+          : selectedSender?.linkedin_identity
+            || (typeof selectedSender?.linkedin_profile_url === 'string'
+              ? selectedSender.linkedin_profile_url.match(/linkedin\.com\/in\/([^/?#]+)/i)?.[1] || ''
+              : '');
       const resolvedEmailSubject =
         emailComposeMode === 'reply'
           ? ensureReplySubject(selectedThread?.subject || emailSubject || 'Quick follow-up')
@@ -700,6 +730,8 @@ export default function HomePage() {
           lead_id: selectedLeadId,
           channel: composeChannel,
           sender_profile_uuid: senderProfileUuid,
+          sender_profile_name: resolvedSenderProfileName || undefined,
+          sender_profile_identity: resolvedSenderProfileIdentity || undefined,
           content: composeText.trim(),
           email_mode: composeChannel === 'email' ? emailComposeMode : undefined,
           subject: composeChannel === 'email' ? resolvedEmailSubject : undefined,
@@ -1250,22 +1282,30 @@ export default function HomePage() {
               </div>
 
               <div ref={timelineRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-                {selectedActivities.map((activity) => (
-                  <div
-                    key={activity.id}
-                    className={`flex ${activity.direction === 'outbound' || activity.type === 'note' || activity.channel === 'note' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className="max-w-[80%]">
-                      <div className="text-[11px] text-slate-400 mb-1 flex items-center gap-1.5">
-                        <ChannelIcon channel={activity.channel} className="w-3.5 h-3.5" />
-                        <span>{eventLabel(activity)} · {fmtRelative(activity.created_at)}</span>
-                      </div>
-                      <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${bubbleClass(activity)}`}>
-                        {getDisplayContent(activity)}
+                {selectedActivities.map((activity) => {
+                  const senderLine = activitySenderLabel(activity);
+                  return (
+                    <div
+                      key={activity.id}
+                      className={`flex ${activity.direction === 'outbound' || activity.type === 'note' || activity.channel === 'note' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div className="max-w-[80%]">
+                        <div className="text-[11px] text-slate-400 mb-1 flex items-center gap-1.5">
+                          <ChannelIcon channel={activity.channel} className="w-3.5 h-3.5" />
+                          <span>{eventLabel(activity)} · {fmtRelative(activity.created_at)}</span>
+                        </div>
+                        {senderLine && (
+                          <div className="text-[10px] text-slate-400/90 mb-1">
+                            {senderLine}
+                          </div>
+                        )}
+                        <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${bubbleClass(activity)}`}>
+                          {getDisplayContent(activity)}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {showSnoozeBar && (

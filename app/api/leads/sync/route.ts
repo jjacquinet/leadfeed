@@ -88,6 +88,9 @@ export async function POST(request: NextRequest) {
       channel: string;
       direction: string;
       content: string;
+      sender_profile_id?: string | null;
+      sender_profile_name?: string | null;
+      sender_profile_identity?: string | null;
       metadata: Record<string, unknown>;
       created_at: string;
     }[] = [];
@@ -104,7 +107,16 @@ export async function POST(request: NextRequest) {
         channel: 'linkedin',
         direction: msg.type === 'inbox' ? 'inbound' : 'outbound',
         content: msg.text,
-        metadata: { external_id: externalId, source: 'getsales_sync' },
+        sender_profile_id: msg.sender_profile_uuid || null,
+        sender_profile_name: msg.sender_profile_name || null,
+        sender_profile_identity: msg.sender_profile_identity || msg.linkedin_identity || null,
+        metadata: {
+          external_id: externalId,
+          source: 'getsales_sync',
+          sender_profile_uuid: msg.sender_profile_uuid || null,
+          sender_profile_name: msg.sender_profile_name || null,
+          sender_profile_identity: msg.sender_profile_identity || msg.linkedin_identity || null,
+        },
         created_at: msg.sent_at || new Date().toISOString(),
       });
     }
@@ -131,6 +143,18 @@ export async function POST(request: NextRequest) {
         channel: 'email',
         direction: email.type === 'inbox' ? 'inbound' : 'outbound',
         content,
+        sender_profile_id:
+          typeof email.sender_profile_uuid === 'string' ? email.sender_profile_uuid : null,
+        sender_profile_name:
+          typeof (email as Record<string, unknown>).sender_profile_name === 'string'
+            ? ((email as Record<string, unknown>).sender_profile_name as string)
+            : typeof (email as Record<string, unknown>).from_name === 'string'
+              ? ((email as Record<string, unknown>).from_name as string)
+              : null,
+        sender_profile_identity:
+          typeof (email as Record<string, unknown>).from_email === 'string'
+            ? ((email as Record<string, unknown>).from_email as string)
+            : null,
         metadata: {
           external_id: externalId,
           source: 'getsales_sync',
@@ -139,6 +163,16 @@ export async function POST(request: NextRequest) {
           subject: email.subject || null,
           sender_profile_uuid:
             typeof email.sender_profile_uuid === 'string' ? email.sender_profile_uuid : null,
+          sender_profile_name:
+            typeof (email as Record<string, unknown>).sender_profile_name === 'string'
+              ? ((email as Record<string, unknown>).sender_profile_name as string)
+              : typeof (email as Record<string, unknown>).from_name === 'string'
+                ? ((email as Record<string, unknown>).from_name as string)
+                : null,
+          sender_profile_identity:
+            typeof (email as Record<string, unknown>).from_email === 'string'
+              ? ((email as Record<string, unknown>).from_email as string)
+              : null,
           thread_id:
             (typeof email.thread_id === 'string' && email.thread_id) ||
             (typeof email.thread_uuid === 'string' && email.thread_uuid) ||

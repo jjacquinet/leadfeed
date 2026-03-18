@@ -14,9 +14,23 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { lead_id, sender_profile_uuid, channel, content, subject, email_mode, thread_id, reply_to_email_uuid, attachments } = body as {
+    const {
+      lead_id,
+      sender_profile_uuid,
+      sender_profile_name,
+      sender_profile_identity,
+      channel,
+      content,
+      subject,
+      email_mode,
+      thread_id,
+      reply_to_email_uuid,
+      attachments,
+    } = body as {
       lead_id?: string;
       sender_profile_uuid?: string;
+      sender_profile_name?: string;
+      sender_profile_identity?: string;
       channel?: 'linkedin' | 'email';
       content?: string;
       subject?: string;
@@ -67,8 +81,22 @@ export async function POST(request: NextRequest) {
 
     let externalId: string | null = null;
     let messageContent = messageText;
+    let resolvedSenderProfileName = typeof sender_profile_name === 'string' ? sender_profile_name.trim() : '';
+    let resolvedSenderProfileIdentity =
+      typeof sender_profile_identity === 'string' ? sender_profile_identity.trim() : '';
 
     if (channel === 'linkedin') {
+      const senderProfiles = await fetchSenderProfiles();
+      const selectedProfile = senderProfiles.find((profile) => profile.uuid === sender_profile_uuid);
+      if (!resolvedSenderProfileName && selectedProfile) {
+        resolvedSenderProfileName =
+          [selectedProfile.first_name, selectedProfile.last_name].filter(Boolean).join(' ').trim()
+          || selectedProfile.label
+          || '';
+      }
+      if (!resolvedSenderProfileIdentity && selectedProfile?.linkedin_account_uuid) {
+        resolvedSenderProfileIdentity = selectedProfile.linkedin_account_uuid;
+      }
       const result = await sendLinkedInMessage({
         sender_profile_uuid,
         lead_uuid: leadUuid,
@@ -103,6 +131,17 @@ export async function POST(request: NextRequest) {
         if (!resolvedFromName) {
           resolvedFromName = mailbox?.sender_name?.trim() || '';
         }
+      }
+
+      if (!resolvedSenderProfileName) {
+        resolvedSenderProfileName =
+          resolvedFromName
+          || [selectedProfile?.first_name, selectedProfile?.last_name].filter(Boolean).join(' ').trim()
+          || selectedProfile?.label
+          || '';
+      }
+      if (!resolvedSenderProfileIdentity) {
+        resolvedSenderProfileIdentity = resolvedFromEmail || '';
       }
 
       if (!resolvedFromEmail) {
@@ -163,9 +202,14 @@ export async function POST(request: NextRequest) {
         channel,
         direction: 'outbound',
         content: messageContent,
+        sender_profile_id: sender_profile_uuid,
+        sender_profile_name: resolvedSenderProfileName || null,
+        sender_profile_identity: resolvedSenderProfileIdentity || null,
         metadata: {
           ...(externalId ? { external_id: externalId } : {}),
           sender_profile_uuid,
+          sender_profile_name: resolvedSenderProfileName || null,
+          sender_profile_identity: resolvedSenderProfileIdentity || null,
           subject: subject?.trim() || null,
           email_mode: email_mode || null,
           thread_id: typeof thread_id === 'string' ? thread_id : null,

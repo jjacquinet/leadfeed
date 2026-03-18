@@ -64,6 +64,9 @@ export interface Activity {
   channel: 'email' | 'linkedin' | 'call' | 'text' | 'note';
   direction: MessageDirection;
   content: string;
+  sender_profile_id?: string | null;
+  sender_profile_name?: string | null;
+  sender_profile_identity?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at: string;
 }
