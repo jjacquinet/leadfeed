@@ -688,7 +688,7 @@ export async function sendEmail(params: {
     lead_uuid: params.lead_uuid,
     from_name: params.from_name,
     from_email: params.from_email,
-    to: [params.to_email],
+    to: [{ to_name: params.to_name || '', to_email: params.to_email }],
     to_name: params.to_name || null,
     to_email: params.to_email,
     cc: [],
