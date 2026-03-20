@@ -682,83 +682,97 @@ export async function sendEmail(params: {
 }): Promise<Record<string, unknown>> {
   const attachments = (params.attachments || []).map((attachment) => ({
     filename: attachment.filename,
-    name: attachment.filename,
     content_type: attachment.content_type || 'application/octet-stream',
-    mime_type: attachment.content_type || 'application/octet-stream',
     content_base64: attachment.content_base64,
-    data: attachment.content_base64,
     size: attachment.size || undefined,
   }));
 
   const basePayload: Record<string, unknown> = {
     sender_profile_uuid: params.sender_profile_uuid,
     lead_uuid: params.lead_uuid,
-    ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
     from_name: params.from_name,
     from_email: params.from_email,
     to_name: params.to_name,
     to_email: params.to_email,
     subject: params.subject,
-    body: params.body,
     cc: [],
     bcc: [],
   };
 
-  const executeSend = async (bodyPayload: Record<string, unknown>) =>
-    fetch(`${GETSALES_BASE_URL}/emails/api/emails/send-email`, {
+  const executeSend = async (url: string, bodyPayload: Record<string, unknown>) =>
+    fetch(url, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(bodyPayload),
     });
 
-  const attemptPayloads: Record<string, unknown>[] = [
+  const payloadForReply: Record<string, unknown>[] = [
+    // Documented OpenAPI-style body for send-email replies.
     {
       ...basePayload,
-      body: params.body,
       ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    },
-    {
-      ...basePayload,
-      body: params.body,
-      type: 'outbox',
-      ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
-    },
-    {
-      ...basePayload,
-      // Public API docs show this as required set for send-email.
-      ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
-    },
-    {
-      ...basePayload,
+      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
       emailBodyDomain: {
         body: params.body,
         subject: params.subject,
         attachments: attachments.length > 0 ? attachments : [],
       },
+    },
+    // Flat body variant some deployments expect.
+    {
+      ...basePayload,
+      body: params.body,
       ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
+      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
     },
   ];
 
+  const payloadForNew: Record<string, unknown>[] = [
+    {
+      ...basePayload,
+      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      emailBodyDomain: {
+        body: params.body,
+        subject: params.subject,
+        attachments: attachments.length > 0 ? attachments : [],
+      },
+    },
+    {
+      ...basePayload,
+      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      body: params.body,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    },
+  ];
+
+  const attemptPayloads = params.replied_to_uuid ? payloadForReply : payloadForNew;
+  const endpointCandidates = Array.from(new Set([
+    `${GETSALES_BASE_URL.replace(/\/+$/, '')}/emails/api/emails/send-email`,
+    'https://api.getsales.io/api/openapi/unibox/sendemail',
+  ]));
+
   let lastError = 'Unknown GetSales send-email error';
-  for (const payload of attemptPayloads) {
-    const response = await executeSend(payload);
-    const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (response.ok) {
-      return responsePayload;
-    }
-    const message = (
-      (typeof responsePayload.message === 'string' && responsePayload.message) ||
-      (typeof responsePayload.error === 'string' && responsePayload.error) ||
-      `Email send failed (${response.status})`
-    );
-    const errors =
-      responsePayload && typeof responsePayload.errors === 'object'
-        ? ` | errors=${JSON.stringify(responsePayload.errors)}`
-        : '';
-    lastError = `${message}${errors}`;
-    if (response.status !== 422 && response.status !== 400) {
-      break;
+  for (const endpoint of endpointCandidates) {
+    for (const payload of attemptPayloads) {
+      const response = await executeSend(endpoint, payload);
+      const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (response.ok) {
+        return responsePayload;
+      }
+      const message = (
+        (typeof responsePayload.message === 'string' && responsePayload.message) ||
+        (typeof responsePayload.error === 'string' && responsePayload.error) ||
+        `Email send failed (${response.status})`
+      );
+      const errors =
+        responsePayload && typeof responsePayload.errors === 'object'
+          ? ` | errors=${JSON.stringify(responsePayload.errors)}`
+          : '';
+      lastError = `${message}${errors} | endpoint=${endpoint}`;
+      if (response.status !== 422 && response.status !== 400) {
+        break;
+      }
     }
   }
 
