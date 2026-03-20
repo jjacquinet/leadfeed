@@ -95,6 +95,20 @@ export type EnsureProspectInput = {
   company?: string | null;
 };
 
+type GetSalesLeadLite = {
+  uuid?: string;
+  id?: string;
+  email?: string | null;
+  linkedin_url?: string | null;
+  linkedin?: string | null;
+  profile_url?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  name?: string | null;
+  company?: string | null;
+  [key: string]: any;
+};
+
 type ProspectLikeResponse = {
   uuid?: string;
   id?: string;
@@ -139,11 +153,111 @@ function linkedinCandidates(input?: string | null): { url: string | null; slug: 
   };
 }
 
+function normalizeEmail(email?: string | null): string | null {
+  if (!email) return null;
+  const trimmed = email.trim().toLowerCase();
+  return trimmed || null;
+}
+
+function extractLinkedInSlug(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const direct = trimmed.match(/linkedin\.com\/in\/([^/?#]+)/i)?.[1];
+  if (direct) return direct.toLowerCase();
+  if (/^[a-z0-9-._]+$/i.test(trimmed)) return trimmed.toLowerCase();
+  return null;
+}
+
+async function listLeadsAndMatch(input: {
+  email?: string | null;
+  linkedin_url?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  company?: string | null;
+}): Promise<string | null> {
+  const candidatePaths = ['/leads/api/leads', '/leads/api/prospects'];
+  const targetEmail = normalizeEmail(input.email);
+  const linkedIn = linkedinCandidates(input.linkedin_url);
+  const targetSlug = linkedIn.slug?.toLowerCase() || null;
+  const targetLinkedInUrl = linkedIn.url || null;
+  const targetName = [input.first_name, input.last_name].filter(Boolean).join(' ').trim().toLowerCase();
+  const targetCompany = input.company?.trim().toLowerCase() || null;
+
+  for (const path of candidatePaths) {
+    for (let offset = 0; offset <= 400; offset += 100) {
+      try {
+        const url = new URL(path, GETSALES_BASE_URL);
+        url.searchParams.set('limit', '100');
+        url.searchParams.set('offset', String(offset));
+        const response = await fetch(url.toString(), { headers: getHeaders() });
+        if (!response.ok) break;
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        const rows = (payload.data || payload || []) as GetSalesLeadLite[];
+        if (!Array.isArray(rows) || rows.length === 0) break;
+
+        for (const row of rows) {
+          const rowUuid = extractUuid(row as ProspectLikeResponse);
+          if (!rowUuid) continue;
+
+          const rowEmail = normalizeEmail(typeof row.email === 'string' ? row.email : null);
+          if (targetEmail && rowEmail && targetEmail === rowEmail) {
+            return rowUuid;
+          }
+
+          const rowLinkedInUrl =
+            typeof row.linkedin_url === 'string'
+              ? normalizeLinkedInUrl(row.linkedin_url)
+              : typeof row.profile_url === 'string'
+                ? normalizeLinkedInUrl(row.profile_url)
+                : null;
+          const rowLinkedInSlug = extractLinkedInSlug(
+            typeof row.linkedin === 'string'
+              ? row.linkedin
+              : rowLinkedInUrl
+          );
+
+          if (targetLinkedInUrl && rowLinkedInUrl && targetLinkedInUrl === rowLinkedInUrl) {
+            return rowUuid;
+          }
+          if (targetSlug && rowLinkedInSlug && targetSlug === rowLinkedInSlug) {
+            return rowUuid;
+          }
+
+          if (targetName) {
+            const rowName = [
+              typeof row.first_name === 'string' ? row.first_name : null,
+              typeof row.last_name === 'string' ? row.last_name : null,
+            ].filter(Boolean).join(' ').trim().toLowerCase()
+              || (typeof row.name === 'string' ? row.name.trim().toLowerCase() : '');
+            const rowCompany = typeof row.company === 'string' ? row.company.trim().toLowerCase() : null;
+            if (rowName && rowName === targetName) {
+              if (!targetCompany || !rowCompany || targetCompany === rowCompany) {
+                return rowUuid;
+              }
+            }
+          }
+        }
+      } catch {
+        break;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Look up a contact in GetSales.io by LinkedIn URL or email.
  * Returns the GetSales UUID if found.
  */
-export async function lookupContact(linkedinUrl?: string | null, email?: string | null): Promise<string | null> {
+export async function lookupContact(
+  linkedinUrl?: string | null,
+  email?: string | null,
+  firstName?: string | null,
+  lastName?: string | null,
+  company?: string | null
+): Promise<string | null> {
   if (!process.env.GETSALES_API_KEY) return null;
   const linkedIn = linkedinCandidates(linkedinUrl);
 
@@ -225,6 +339,16 @@ export async function lookupContact(linkedinUrl?: string | null, email?: string 
     }
   }
 
+  // Last resort: list leads/prospects and match locally by email/linkedin/name.
+  const matchedFromList = await listLeadsAndMatch({
+    email,
+    linkedin_url: linkedIn.url || linkedinUrl || null,
+    first_name: firstName || null,
+    last_name: lastName || null,
+    company: company || null,
+  });
+  if (matchedFromList) return matchedFromList;
+
   return null;
 }
 
@@ -234,36 +358,58 @@ async function createProspect(input: EnsureProspectInput): Promise<string | null
     '/leads/api/lead',
     '/flows/api/prospects',
   ];
-  const payload = {
-    first_name: input.first_name || undefined,
-    last_name: input.last_name || undefined,
-    email: input.email || undefined,
-    linkedin_url: input.linkedin_url || undefined,
-    title: input.title || undefined,
-    company: input.company || undefined,
-  };
+  const linkedIn = linkedinCandidates(input.linkedin_url);
+  const payloadVariants: Record<string, unknown>[] = [
+    {
+      first_name: input.first_name || undefined,
+      last_name: input.last_name || undefined,
+      email: input.email || undefined,
+      linkedin_url: linkedIn.url || input.linkedin_url || undefined,
+      linkedin: linkedIn.slug || undefined,
+      title: input.title || undefined,
+      company: input.company || undefined,
+      company_name: input.company || undefined,
+    },
+    {
+      name: [input.first_name, input.last_name].filter(Boolean).join(' ').trim() || undefined,
+      email: input.email || undefined,
+      linkedin_url: linkedIn.url || input.linkedin_url || undefined,
+      linkedin: linkedIn.slug || undefined,
+      title: input.title || undefined,
+      company: input.company || undefined,
+      company_name: input.company || undefined,
+    },
+  ];
 
   for (const path of candidatePaths) {
-    try {
-      const url = new URL(path, GETSALES_BASE_URL);
-      const response = await fetch(url.toString(), {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) continue;
-      const data = (await response.json().catch(() => ({}))) as ProspectLikeResponse;
-      const uuid = extractUuid(data);
-      if (uuid) return uuid;
-    } catch {
-      // Try next candidate endpoint.
+    for (const payload of payloadVariants) {
+      try {
+        const url = new URL(path, GETSALES_BASE_URL);
+        const response = await fetch(url.toString(), {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) continue;
+        const data = (await response.json().catch(() => ({}))) as ProspectLikeResponse;
+        const uuid = extractUuid(data);
+        if (uuid) return uuid;
+      } catch {
+        // Try next candidate endpoint.
+      }
     }
   }
   return null;
 }
 
 export async function ensureProspect(input: EnsureProspectInput): Promise<string | null> {
-  const existing = await lookupContact(input.linkedin_url, input.email);
+  const existing = await lookupContact(
+    input.linkedin_url,
+    input.email,
+    input.first_name,
+    input.last_name,
+    input.company
+  );
   if (existing) return existing;
   return createProspect(input);
 }
