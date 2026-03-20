@@ -220,8 +220,15 @@ function linkedInSenderProfileLabel(profile: SenderProfileOption): string {
   return `${name} (${identity})`;
 }
 
-function activitySenderLabel(activity: Activity): string | null {
+function activitySenderLabel(
+  activity: Activity,
+  senderProfilesByUuid?: Map<string, SenderProfileOption>
+): string | null {
   const metadata = (activity.metadata || {}) as Record<string, unknown>;
+  const senderProfileUuid =
+    activity.sender_profile_id ||
+    (typeof metadata.sender_profile_uuid === 'string' ? metadata.sender_profile_uuid : null) ||
+    null;
   const senderName =
     activity.sender_profile_name ||
     (typeof metadata.sender_profile_name === 'string' ? metadata.sender_profile_name : null) ||
@@ -233,9 +240,36 @@ function activitySenderLabel(activity: Activity): string | null {
     (typeof metadata.from_email === 'string' ? metadata.from_email : null) ||
     null;
 
-  if (!senderName && !identity) return null;
-  if (senderName && identity) return `via ${senderName} (${identity})`;
-  return `via ${senderName || identity}`;
+  let resolvedName = senderName;
+  let resolvedIdentity = identity;
+
+  if ((!resolvedName || !resolvedIdentity) && senderProfileUuid && senderProfilesByUuid) {
+    const profile = senderProfilesByUuid.get(senderProfileUuid);
+    if (profile) {
+      if (!resolvedName) {
+        resolvedName =
+          profile.from_name ||
+          [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim() ||
+          profile.label ||
+          null;
+      }
+      if (!resolvedIdentity) {
+        resolvedIdentity =
+          activity.channel === 'email'
+            ? profile.from_email || null
+            : profile.linkedin_identity
+              || (typeof profile.linkedin_profile_url === 'string'
+                ? profile.linkedin_profile_url.match(/linkedin\.com\/in\/([^/?#]+)/i)?.[1] || null
+                : null)
+              || profile.from_email
+              || null;
+      }
+    }
+  }
+
+  if (!resolvedName && !resolvedIdentity) return null;
+  if (resolvedName && resolvedIdentity) return `via ${resolvedName} (${resolvedIdentity})`;
+  return `via ${resolvedName || resolvedIdentity}`;
 }
 
 function getMostRecentNote(activities: Activity[]): string | null {
@@ -389,6 +423,17 @@ export default function HomePage() {
     }
     return null;
   }, [selectedActivities]);
+  const senderProfilesByUuid = useMemo(() => {
+    const map = new Map<string, SenderProfileOption>();
+    for (const profile of senderProfiles) {
+      map.set(profile.uuid, profile);
+    }
+    for (const profile of linkedInSenderProfiles) {
+      const existing = map.get(profile.uuid);
+      map.set(profile.uuid, { ...(existing || {}), ...profile });
+    }
+    return map;
+  }, [senderProfiles, linkedInSenderProfiles]);
 
   const loadLeads = useCallback(async () => {
     const [activeRes, snoozedRes, closedRes] = await Promise.all([
@@ -487,6 +532,34 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [composeChannel, selectedLeadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [emailProfilesRes, linkedinProfilesRes] = await Promise.all([
+          fetch('/api/getsales/sender-profiles'),
+          fetch('/api/getsales/sender-profiles?channel=linkedin'),
+        ]);
+        const [emailProfilesData, linkedinProfilesData] = await Promise.all([
+          emailProfilesRes.json().catch(() => []),
+          linkedinProfilesRes.json().catch(() => []),
+        ]);
+        if (cancelled) return;
+        if (Array.isArray(emailProfilesData)) {
+          setSenderProfiles(emailProfilesData as SenderProfileOption[]);
+        }
+        if (Array.isArray(linkedinProfilesData)) {
+          setLinkedInSenderProfiles(linkedinProfilesData as SenderProfileOption[]);
+        }
+      } catch {
+        // Non-blocking: timeline still renders without sender lookup labels.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLeadId]);
 
   useEffect(() => {
     if (composeChannel !== 'linkedin') return;
@@ -1283,7 +1356,7 @@ export default function HomePage() {
 
               <div ref={timelineRef} className="flex-1 overflow-y-auto p-4 space-y-3">
                 {selectedActivities.map((activity) => {
-                  const senderLine = activitySenderLabel(activity);
+                  const senderLine = activitySenderLabel(activity, senderProfilesByUuid);
                   return (
                     <div
                       key={activity.id}
