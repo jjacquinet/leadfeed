@@ -706,32 +706,11 @@ export async function sendEmail(params: {
       body: JSON.stringify(bodyPayload),
     });
 
-  const payloadForReply: Record<string, unknown>[] = [
-    // Documented OpenAPI-style body for send-email replies.
-    {
-      ...basePayload,
-      ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
-      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
-      emailBodyDomain: {
-        body: params.body,
-        subject: params.subject,
-        attachments: attachments.length > 0 ? attachments : [],
-      },
-    },
-    // Flat body variant some deployments expect.
-    {
-      ...basePayload,
-      body: params.body,
-      ...(params.replied_to_uuid ? { replied_to_uuid: params.replied_to_uuid } : {}),
-      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    },
-  ];
-
-  const payloadForNew: Record<string, unknown>[] = [
+  const withBodyPayloads = (extra: Record<string, unknown> = {}): Record<string, unknown>[] => [
     {
       ...basePayload,
       ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      ...extra,
       emailBodyDomain: {
         body: params.body,
         subject: params.subject,
@@ -741,17 +720,33 @@ export async function sendEmail(params: {
     {
       ...basePayload,
       ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      ...extra,
+      type: 'outbox',
+      emailBodyDomain: {
+        body: params.body,
+        subject: params.subject,
+        attachments: attachments.length > 0 ? attachments : [],
+      },
+    },
+    {
+      ...basePayload,
+      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
+      ...extra,
       body: params.body,
       ...(attachments.length > 0 ? { attachments } : {}),
     },
   ];
 
-  const attemptPayloads = params.replied_to_uuid ? payloadForReply : payloadForNew;
+  // For replies, first try true reply semantics; if validator rejects replied_to_uuid, fallback
+  // to a plain send with "Re:" subject so the rep can still send.
+  const attemptPayloads = params.replied_to_uuid
+    ? [
+        ...withBodyPayloads({ replied_to_uuid: params.replied_to_uuid }),
+        ...withBodyPayloads(),
+      ]
+    : withBodyPayloads();
   const base = GETSALES_BASE_URL.replace(/\/+$/, '');
-  const endpointCandidates = Array.from(new Set([
-    `${base}/emails/api/emails/send-email`,
-    `${base}/api/openapi/unibox/sendemail`,
-  ]));
+  const endpointCandidates = [`${base}/emails/api/emails/send-email`];
 
   const collectedErrors: string[] = [];
   for (const endpoint of endpointCandidates) {
@@ -761,9 +756,9 @@ export async function sendEmail(params: {
       if (response.ok) {
         return responsePayload;
       }
-      if (response.status === 404) {
+      if (response.status === 404 || response.status === 405) {
         // Endpoint shape not available in this GetSales deployment; try next endpoint.
-        collectedErrors.push(`Endpoint not found (404) | endpoint=${endpoint}`);
+        collectedErrors.push(`Endpoint unavailable (${response.status}) | endpoint=${endpoint}`);
         break;
       }
       const message = (
