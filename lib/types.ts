@@ -1,5 +1,17 @@
 export type LeadStatus = 'active' | 'snoozed' | 'closed';
-export type DealStage = 'lead' | 'conversation' | 'demo_scheduled' | 'proposal_sent' | 'contract_sent';
+export type DealStage =
+  | 'positive_reply'
+  | 'meeting_booked'
+  | 'meeting_completed'
+  | 'deal'
+  | 'contract_sent'
+  | 'closed_won'
+  | 'closed_lost'
+  // Legacy values kept for compatibility with older rows before migration.
+  | 'lead'
+  | 'conversation'
+  | 'demo_scheduled'
+  | 'proposal_sent';
 
 // Legacy stage values kept for compatibility with older components/routes.
 export type LeadStage = 'lead_feed' | 'snoozed';

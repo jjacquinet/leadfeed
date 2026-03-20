@@ -50,12 +50,29 @@ type AddLeadForm = {
   phone: string;
 };
 
+const DEAL_STAGE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'positive_reply', label: 'Positive Reply' },
+  { value: 'meeting_booked', label: 'Meeting Booked' },
+  { value: 'meeting_completed', label: 'Meeting Completed' },
+  { value: 'deal', label: 'Deal' },
+  { value: 'contract_sent', label: 'Contract Sent' },
+  { value: 'closed_won', label: 'Closed Won' },
+  { value: 'closed_lost', label: 'Closed Lost' },
+];
+
 const STAGE_LABELS: Record<string, string> = {
-  lead: 'Lead',
-  conversation: 'Conversation',
-  demo_scheduled: 'Demo Scheduled',
-  proposal_sent: 'Proposal Sent',
+  positive_reply: 'Positive Reply',
+  meeting_booked: 'Meeting Booked',
+  meeting_completed: 'Meeting Completed',
+  deal: 'Deal',
   contract_sent: 'Contract Sent',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  // Legacy values kept for backward-compatible display.
+  lead: 'Positive Reply',
+  conversation: 'Positive Reply',
+  demo_scheduled: 'Meeting Booked',
+  proposal_sent: 'Deal',
 };
 
 const SNOOZE_OPTIONS: Array<{ label: string; days: number }> = [
@@ -189,6 +206,28 @@ function ensureReplySubject(subject: string): string {
   if (!subject.trim()) return '';
   if (/^re:\s*/i.test(subject)) return subject.trim();
   return `Re: ${subject.trim()}`;
+}
+
+function normalizeDealStage(value?: string | null): string {
+  switch ((value || '').trim()) {
+    case 'lead':
+    case 'conversation':
+      return 'positive_reply';
+    case 'demo_scheduled':
+      return 'meeting_booked';
+    case 'proposal_sent':
+      return 'deal';
+    case 'contract_sent':
+    case 'closed_won':
+    case 'closed_lost':
+    case 'meeting_booked':
+    case 'meeting_completed':
+    case 'deal':
+    case 'positive_reply':
+      return (value || '').trim();
+    default:
+      return 'positive_reply';
+  }
 }
 
 function normalizeThreadKey(subject: string): string {
@@ -332,6 +371,7 @@ export default function HomePage() {
   const [savingEmail, setSavingEmail] = useState(false);
   const [syncingActivity, setSyncingActivity] = useState(false);
   const [syncActivityMessage, setSyncActivityMessage] = useState('');
+  const [savingDealStage, setSavingDealStage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [leftWidth, setLeftWidth] = useState(300);
@@ -512,6 +552,7 @@ export default function HomePage() {
     setEmailInput('');
     setSavingEmail(false);
     setSyncActivityMessage('');
+    setSavingDealStage(false);
     setEmailComposeMode('reply');
     setSelectedEmailThreadId('');
     setSelectedSenderProfileUuid('');
@@ -968,6 +1009,18 @@ export default function HomePage() {
     await loadLeads();
   };
 
+  const updateLeadDealStage = async (leadId: string, dealStage: string) => {
+    const response = await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: leadId, deal_stage: dealStage }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update deal stage');
+    }
+    await loadLeads();
+  };
+
   const updateLeadEmail = async (leadId: string, email: string | null) => {
     const response = await fetch('/api/leads', {
       method: 'PATCH',
@@ -1075,6 +1128,21 @@ export default function HomePage() {
       alert('Failed to save email.');
     } finally {
       setSavingEmail(false);
+    }
+  };
+
+  const onDealStageChange = async (dealStage: string) => {
+    if (!selectedLead || savingDealStage) return;
+    const normalizedStage = normalizeDealStage(dealStage);
+    if (normalizeDealStage(selectedLead.deal_stage) === normalizedStage) return;
+    try {
+      setSavingDealStage(true);
+      await updateLeadDealStage(selectedLead.id, normalizedStage);
+    } catch (error) {
+      console.error('Failed to update deal stage:', error);
+      alert('Failed to update deal stage.');
+    } finally {
+      setSavingDealStage(false);
     }
   };
 
@@ -2048,7 +2116,21 @@ export default function HomePage() {
                 <p className="text-xs text-slate-600"><span className="text-slate-400">SOURCE:</span> {selectedLead.lead_source || selectedLead.source || '—'}</p>
                 <p className="text-xs text-slate-600"><span className="text-slate-400">LEAD DATE:</span> {fmtRelative(selectedLead.created_at)}</p>
                 <p className="text-xs text-slate-600"><span className="text-slate-400">LAST TOUCH:</span> {fmtRelative(selectedLead.last_activity_at || selectedLead.last_activity)}</p>
-                <p className="text-xs text-slate-600"><span className="text-slate-400">DEAL STAGE:</span> {STAGE_LABELS[selectedLead.deal_stage || 'lead'] || 'Lead'}</p>
+                <div className="text-xs text-slate-600 flex items-center gap-2">
+                  <span className="text-slate-400">DEAL STAGE:</span>
+                  <select
+                    value={normalizeDealStage(selectedLead.deal_stage)}
+                    onChange={(event) => onDealStageChange(event.target.value)}
+                    disabled={savingDealStage}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 disabled:opacity-50"
+                  >
+                    {DEAL_STAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="py-4">
