@@ -747,18 +747,24 @@ export async function sendEmail(params: {
   ];
 
   const attemptPayloads = params.replied_to_uuid ? payloadForReply : payloadForNew;
+  const base = GETSALES_BASE_URL.replace(/\/+$/, '');
   const endpointCandidates = Array.from(new Set([
-    `${GETSALES_BASE_URL.replace(/\/+$/, '')}/emails/api/emails/send-email`,
-    'https://api.getsales.io/api/openapi/unibox/sendemail',
+    `${base}/emails/api/emails/send-email`,
+    `${base}/api/openapi/unibox/sendemail`,
   ]));
 
-  let lastError = 'Unknown GetSales send-email error';
+  const collectedErrors: string[] = [];
   for (const endpoint of endpointCandidates) {
     for (const payload of attemptPayloads) {
       const response = await executeSend(endpoint, payload);
       const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (response.ok) {
         return responsePayload;
+      }
+      if (response.status === 404) {
+        // Endpoint shape not available in this GetSales deployment; try next endpoint.
+        collectedErrors.push(`Endpoint not found (404) | endpoint=${endpoint}`);
+        break;
       }
       const message = (
         (typeof responsePayload.message === 'string' && responsePayload.message) ||
@@ -769,12 +775,12 @@ export async function sendEmail(params: {
         responsePayload && typeof responsePayload.errors === 'object'
           ? ` | errors=${JSON.stringify(responsePayload.errors)}`
           : '';
-      lastError = `${message}${errors} | endpoint=${endpoint}`;
+      collectedErrors.push(`${message}${errors} | endpoint=${endpoint}`);
       if (response.status !== 422 && response.status !== 400) {
         break;
       }
     }
   }
 
-  throw new Error(lastError);
+  throw new Error(collectedErrors.join(' || ') || 'Unknown GetSales send-email error');
 }
