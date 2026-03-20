@@ -116,24 +116,55 @@ function extractUuid(payload: ProspectLikeResponse | null | undefined): string |
   return null;
 }
 
+function normalizeLinkedInUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withProtocol);
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.hostname.toLowerCase()}${path}`;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+function linkedinCandidates(input?: string | null): { url: string | null; slug: string | null } {
+  if (!input) return { url: null, slug: null };
+  const normalized = normalizeLinkedInUrl(input);
+  const slugMatch = normalized.match(/linkedin\.com\/in\/([^/?#]+)/i);
+  return {
+    url: normalized || null,
+    slug: slugMatch?.[1] || null,
+  };
+}
+
 /**
  * Look up a contact in GetSales.io by LinkedIn URL or email.
  * Returns the GetSales UUID if found.
  */
 export async function lookupContact(linkedinUrl?: string | null, email?: string | null): Promise<string | null> {
   if (!process.env.GETSALES_API_KEY) return null;
+  const linkedIn = linkedinCandidates(linkedinUrl);
 
-  // Try lookup by LinkedIn URL first
-  if (linkedinUrl) {
+  // Try lookup by LinkedIn URL first (canonicalized + raw form)
+  if (linkedIn.url || linkedinUrl) {
+    const linkedInVariants = Array.from(
+      new Set(
+        [linkedIn.url, linkedinUrl].filter((value): value is string => Boolean(value && value.trim()))
+      )
+    );
     try {
-      const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/lookup-one`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ linkedin_url: linkedinUrl }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data?.uuid) return data.uuid;
+      for (const candidate of linkedInVariants) {
+        const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/lookup-one`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({ linkedin_url: candidate }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.uuid) return data.uuid;
+        }
       }
     } catch (error) {
       console.error('[getsales] LinkedIn lookup failed:', error);
@@ -157,17 +188,29 @@ export async function lookupContact(linkedinUrl?: string | null, email?: string 
     }
   }
 
-  // Try search as fallback
-  if (linkedinUrl) {
+  // Try search fallbacks by slug and canonical URL
+  if (linkedIn.slug || linkedIn.url) {
     try {
-      // Extract the LinkedIn username/slug from the URL
-      const match = linkedinUrl.match(/linkedin\.com\/in\/([^/?]+)/);
-      const linkedin = match ? match[1] : null;
-      if (linkedin) {
+      if (linkedIn.slug) {
         const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/search`, {
           method: 'POST',
           headers: getHeaders(),
-          body: JSON.stringify({ filter: { linkedin } }),
+          body: JSON.stringify({ filter: { linkedin: linkedIn.slug } }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const results = data?.data || data;
+          if (Array.isArray(results) && results.length > 0 && results[0].uuid) {
+            return results[0].uuid;
+          }
+        }
+      }
+
+      if (linkedIn.url) {
+        const response = await fetch(`${GETSALES_BASE_URL}/leads/api/leads/search`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({ filter: { linkedin_url: linkedIn.url } }),
         });
         if (response.ok) {
           const data = await response.json();
