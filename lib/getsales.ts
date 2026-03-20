@@ -700,9 +700,17 @@ export async function sendEmail(params: {
     base.mailbox_uuid = params.mailbox_uuid;
   }
 
+  const safeAttachments = Array.isArray(params.attachments) && params.attachments.length > 0
+    ? params.attachments.map(a => ({
+        filename: a.filename,
+        content: a.content_base64,
+        content_type: a.content_type || 'application/octet-stream',
+      }))
+    : undefined;
+
   const attemptPayloads: Record<string, unknown>[] = [
-    { ...base },
-    { ...base, type: 'outbox' },
+    { ...base, ...(safeAttachments ? { attachments: safeAttachments } : {}) },
+    { ...base, ...(safeAttachments ? { emailBodyDomain: { body: params.body, subject: params.subject, attachments: safeAttachments } } : {}), type: 'outbox' },
   ];
 
   console.log('[getsales] send-email values:', JSON.stringify({
@@ -715,6 +723,7 @@ export async function sendEmail(params: {
     to_email: params.to_email,
     subject: params.subject,
     body_length: params.body?.length ?? 0,
+    attachments_count: params.attachments?.length ?? 0,
   }));
 
   const collectedErrors: string[] = [];
