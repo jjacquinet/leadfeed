@@ -680,100 +680,54 @@ export async function sendEmail(params: {
     size?: number;
   }>;
 }): Promise<Record<string, unknown>> {
-  const attachments = (params.attachments || []).map((attachment) => ({
-    filename: attachment.filename,
-    content_type: attachment.content_type || 'application/octet-stream',
-    content_base64: attachment.content_base64,
-    size: attachment.size || undefined,
-  }));
+  const endpoint = `${GETSALES_BASE_URL.replace(/\/+$/, '')}/emails/api/emails/send-email`;
 
-  const basePayload: Record<string, unknown> = {
+  const docPayload: Record<string, unknown> = {
     sender_profile_uuid: params.sender_profile_uuid,
     lead_uuid: params.lead_uuid,
     from_name: params.from_name,
     from_email: params.from_email,
     to_name: params.to_name,
     to_email: params.to_email,
-    subject: params.subject,
     cc: [],
     bcc: [],
+    subject: params.subject,
   };
 
-  const executeSend = async (url: string, bodyPayload: Record<string, unknown>) =>
-    fetch(url, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(bodyPayload),
-    });
-
-  const withBodyPayloads = (extra: Record<string, unknown> = {}): Record<string, unknown>[] => [
+  const attemptPayloads: Record<string, unknown>[] = [
+    { ...docPayload },
+    { ...docPayload, body: params.body },
     {
-      ...basePayload,
-      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
-      ...extra,
-      emailBodyDomain: {
-        body: params.body,
-        subject: params.subject,
-        attachments: attachments.length > 0 ? attachments : [],
-      },
-    },
-    {
-      ...basePayload,
-      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
-      ...extra,
-      type: 'outbox',
-      emailBodyDomain: {
-        body: params.body,
-        subject: params.subject,
-        attachments: attachments.length > 0 ? attachments : [],
-      },
-    },
-    {
-      ...basePayload,
-      ...(params.mailbox_uuid ? { mailbox_uuid: params.mailbox_uuid } : {}),
-      ...extra,
-      body: params.body,
-      ...(attachments.length > 0 ? { attachments } : {}),
+      ...docPayload,
+      emailBodyDomain: { body: params.body, subject: params.subject },
     },
   ];
 
-  // For replies, first try true reply semantics; if validator rejects replied_to_uuid, fallback
-  // to a plain send with "Re:" subject so the rep can still send.
-  const attemptPayloads = params.replied_to_uuid
-    ? [
-        ...withBodyPayloads({ replied_to_uuid: params.replied_to_uuid }),
-        ...withBodyPayloads(),
-      ]
-    : withBodyPayloads();
-  const base = GETSALES_BASE_URL.replace(/\/+$/, '');
-  const endpointCandidates = [`${base}/emails/api/emails/send-email`];
-
   const collectedErrors: string[] = [];
-  for (const endpoint of endpointCandidates) {
-    for (const payload of attemptPayloads) {
-      const response = await executeSend(endpoint, payload);
-      const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (response.ok) {
-        return responsePayload;
-      }
-      if (response.status === 404 || response.status === 405) {
-        // Endpoint shape not available in this GetSales deployment; try next endpoint.
-        collectedErrors.push(`Endpoint unavailable (${response.status}) | endpoint=${endpoint}`);
-        break;
-      }
-      const message = (
-        (typeof responsePayload.message === 'string' && responsePayload.message) ||
-        (typeof responsePayload.error === 'string' && responsePayload.error) ||
-        `Email send failed (${response.status})`
-      );
-      const errors =
-        responsePayload && typeof responsePayload.errors === 'object'
-          ? ` | errors=${JSON.stringify(responsePayload.errors)}`
-          : '';
-      collectedErrors.push(`${message}${errors} | endpoint=${endpoint}`);
-      if (response.status !== 422 && response.status !== 400) {
-        break;
-      }
+  for (const payload of attemptPayloads) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (response.ok) {
+      return responsePayload;
+    }
+    const message =
+      (typeof responsePayload.message === 'string' && responsePayload.message) ||
+      (typeof responsePayload.error === 'string' && responsePayload.error) ||
+      `Email send failed (${response.status})`;
+    const errorDetail =
+      responsePayload.errors && typeof responsePayload.errors === 'object'
+        ? ` | errors=${JSON.stringify(responsePayload.errors)}`
+        : '';
+    const payloadKeys = Object.keys(payload).join(',');
+    const entry = `${message}${errorDetail} [keys=${payloadKeys}]`;
+    collectedErrors.push(entry);
+    console.error(`[getsales] send-email rejected (${response.status}):`, entry);
+    if (response.status !== 422 && response.status !== 400) {
+      break;
     }
   }
 
