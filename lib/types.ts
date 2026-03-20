@@ -46,6 +46,7 @@ export interface Lead {
   notes?: string | null;
   rep_id?: string | null;
   getsales_uuid: string | null;
+  getsales_prospect_id?: string | null;
   created_at: string;
   updated_at: string;
 

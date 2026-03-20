@@ -27,6 +27,7 @@ export interface GetSalesLinkedInMessage {
   sender_profile_name?: string | null;
   sender_profile_identity?: string | null;
   linkedin_identity?: string | null;
+  connection_event?: 'connection_request_sent' | 'connection_request_accepted' | null;
 }
 
 export interface GetSalesEmail {
@@ -83,6 +84,36 @@ export interface GetSalesLinkedInAccount {
   profile_url?: string | null;
   linkedin_url?: string | null;
   [key: string]: any;
+}
+
+export type EnsureProspectInput = {
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  linkedin_url?: string | null;
+  title?: string | null;
+  company?: string | null;
+};
+
+type ProspectLikeResponse = {
+  uuid?: string;
+  id?: string;
+  data?: {
+    uuid?: string;
+    id?: string;
+  };
+  [key: string]: any;
+};
+
+function extractUuid(payload: ProspectLikeResponse | null | undefined): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  if (typeof payload.uuid === 'string' && payload.uuid) return payload.uuid;
+  if (typeof payload.id === 'string' && payload.id) return payload.id;
+  if (payload.data && typeof payload.data === 'object') {
+    if (typeof payload.data.uuid === 'string' && payload.data.uuid) return payload.data.uuid;
+    if (typeof payload.data.id === 'string' && payload.data.id) return payload.data.id;
+  }
+  return null;
 }
 
 /**
@@ -154,6 +185,46 @@ export async function lookupContact(linkedinUrl?: string | null, email?: string 
   return null;
 }
 
+async function createProspect(input: EnsureProspectInput): Promise<string | null> {
+  const candidatePaths = [
+    '/leads/api/leads',
+    '/leads/api/lead',
+    '/flows/api/prospects',
+  ];
+  const payload = {
+    first_name: input.first_name || undefined,
+    last_name: input.last_name || undefined,
+    email: input.email || undefined,
+    linkedin_url: input.linkedin_url || undefined,
+    title: input.title || undefined,
+    company: input.company || undefined,
+  };
+
+  for (const path of candidatePaths) {
+    try {
+      const url = new URL(path, GETSALES_BASE_URL);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) continue;
+      const data = (await response.json().catch(() => ({}))) as ProspectLikeResponse;
+      const uuid = extractUuid(data);
+      if (uuid) return uuid;
+    } catch {
+      // Try next candidate endpoint.
+    }
+  }
+  return null;
+}
+
+export async function ensureProspect(input: EnsureProspectInput): Promise<string | null> {
+  const existing = await lookupContact(input.linkedin_url, input.email);
+  if (existing) return existing;
+  return createProspect(input);
+}
+
 /**
  * Fetch LinkedIn messages for a contact from GetSales.io API
  */
@@ -178,6 +249,55 @@ export async function fetchLinkedInMessages(leadUuid: string): Promise<GetSalesL
     console.error('[getsales] Error fetching LinkedIn messages:', error);
     return [];
   }
+}
+
+export async function fetchLinkedInConnectionEvents(leadUuid: string): Promise<GetSalesLinkedInMessage[]> {
+  const candidatePaths = [
+    '/flows/api/linkedin-connection-requests',
+    '/flows/api/linkedin-connections',
+    '/flows/api/linkedin-invites',
+  ];
+
+  for (const path of candidatePaths) {
+    try {
+      const url = new URL(path, GETSALES_BASE_URL);
+      url.searchParams.set('filter[lead_uuid]', leadUuid);
+      url.searchParams.set('order-type', 'asc');
+      url.searchParams.set('order-field', 'created_at');
+      url.searchParams.set('limit', '100');
+      const response = await fetch(url.toString(), { headers: getHeaders() });
+      if (!response.ok) continue;
+      const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
+      const rows = (payload.data || payload || []) as Array<Record<string, any>>;
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      return rows.map((row) => {
+        const status = String(row.status || row.event || row.type || '').toLowerCase();
+        const accepted =
+          status.includes('accept') ||
+          status.includes('accepted') ||
+          Boolean(row.accepted_at || row.is_accepted);
+        return {
+          uuid: String(row.uuid || row.id || `${leadUuid}-${row.created_at || row.sent_at || Math.random()}`),
+          text: accepted ? 'Connection request accepted' : 'Connection request sent',
+          type: accepted ? 'inbox' : 'outbox',
+          sent_at: row.sent_at || row.created_at || row.updated_at || null,
+          read_at: row.read_at || null,
+          status: status || (accepted ? 'accepted' : 'sent'),
+          lead_uuid: String(row.lead_uuid || leadUuid),
+          sender_profile_uuid: row.sender_profile_uuid || null,
+          sender_profile_name: row.sender_profile_name || row.sender_name || null,
+          sender_profile_identity:
+            row.sender_profile_identity || row.linkedin_identity || row.linkedin_handle || null,
+          linkedin_identity: row.linkedin_identity || row.linkedin_handle || null,
+          connection_event: accepted ? 'connection_request_accepted' : 'connection_request_sent',
+        } as GetSalesLinkedInMessage;
+      });
+    } catch {
+      // Try next endpoint.
+    }
+  }
+
+  return [];
 }
 
 /**

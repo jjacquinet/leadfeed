@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { normalizePhoneNumbers, primaryPhoneFromList } from '@/lib/phones';
+import { ensureProspect } from '@/lib/getsales';
 
 type QueueLead = {
   id: string;
@@ -293,7 +294,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 });
     }
 
-    return NextResponse.json(data, { status: 201 });
+    let getsalesWarning: string | null = null;
+    let getsalesProspectId: string | null = null;
+    if (process.env.GETSALES_API_KEY) {
+      try {
+        getsalesProspectId = await ensureProspect({
+          first_name: firstName,
+          last_name: lastName,
+          email: email || null,
+          linkedin_url: linkedinUrl || null,
+          title: title || null,
+          company: company || null,
+        });
+
+        if (getsalesProspectId && data?.id) {
+          const updatePayload: Record<string, unknown> = {
+            getsales_prospect_id: getsalesProspectId,
+            updated_at: now,
+          };
+          if (!data.getsales_uuid) {
+            updatePayload.getsales_uuid = getsalesProspectId;
+          }
+          await supabase.from('leads').update(updatePayload).eq('id', data.id);
+          data = {
+            ...data,
+            getsales_prospect_id: getsalesProspectId,
+            getsales_uuid: data.getsales_uuid || getsalesProspectId,
+          };
+        } else {
+          getsalesWarning =
+            'Lead saved, but could not find or create a matching prospect in GetSales.';
+        }
+      } catch (error) {
+        console.error('Error syncing lead to GetSales:', error);
+        getsalesWarning = 'Lead saved, but GetSales sync failed.';
+      }
+    } else {
+      getsalesWarning = 'Lead saved, but GETSALES_API_KEY is not configured.';
+    }
+
+    return NextResponse.json(
+      {
+        ...data,
+        getsales_sync_warning: getsalesWarning,
+        getsales_prospect_id: data?.getsales_prospect_id || getsalesProspectId || null,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

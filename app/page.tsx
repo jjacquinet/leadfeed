@@ -327,6 +327,9 @@ export default function HomePage() {
   const [editingWebsite, setEditingWebsite] = useState(false);
   const [websiteInput, setWebsiteInput] = useState('');
   const [savingWebsite, setSavingWebsite] = useState(false);
+  const [syncingActivity, setSyncingActivity] = useState(false);
+  const [syncingToGetSales, setSyncingToGetSales] = useState(false);
+  const [syncActivityMessage, setSyncActivityMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [leftWidth, setLeftWidth] = useState(300);
@@ -503,6 +506,7 @@ export default function HomePage() {
     setEditingWebsite(false);
     setWebsiteInput('');
     setSavingWebsite(false);
+    setSyncActivityMessage('');
     setEmailComposeMode('reply');
     setSelectedEmailThreadId('');
     setSelectedSenderProfileUuid('');
@@ -1138,6 +1142,9 @@ export default function HomePage() {
       if (payload?.id) {
         setSelectedLeadId(payload.id as string);
       }
+      if (typeof payload?.getsales_sync_warning === 'string' && payload.getsales_sync_warning) {
+        alert(payload.getsales_sync_warning);
+      }
       setComposeChannel('email');
       setComposeText('');
       setShowSnoozeBar(false);
@@ -1146,6 +1153,65 @@ export default function HomePage() {
       alert('Failed to create lead.');
     } finally {
       setAddingLead(false);
+    }
+  };
+
+  const syncLeadToGetSales = async () => {
+    if (!selectedLeadId || syncingToGetSales) return;
+    try {
+      setSyncingToGetSales(true);
+      setSyncActivityMessage('');
+      const response = await fetch(`/api/leads/sync?lead_id=${selectedLeadId}&sync_only_prospect=true`, {
+        method: 'POST',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string'
+            ? payload.error
+            : typeof payload?.message === 'string'
+              ? payload.message
+              : 'Failed to sync lead to GetSales.';
+        alert(message);
+        return;
+      }
+      await loadLeads();
+      setSyncActivityMessage('Synced to GetSales.');
+    } catch (error) {
+      console.error('Failed to sync lead to GetSales:', error);
+      alert('Failed to sync lead to GetSales.');
+    } finally {
+      setSyncingToGetSales(false);
+    }
+  };
+
+  const syncLeadActivityHistory = async () => {
+    if (!selectedLeadId || syncingActivity) return;
+    try {
+      setSyncingActivity(true);
+      setSyncActivityMessage('');
+      const response = await fetch(`/api/leads/sync?lead_id=${selectedLeadId}`, {
+        method: 'POST',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string'
+            ? payload.error
+            : typeof payload?.message === 'string'
+              ? payload.message
+              : 'Failed to sync activity.';
+        alert(message);
+        return;
+      }
+      await Promise.all([loadLeads(), syncAndLoadActivities(selectedLeadId)]);
+      const syncedCount = typeof payload?.synced === 'number' ? payload.synced : 0;
+      setSyncActivityMessage(`Synced ${syncedCount} activities.`);
+    } catch (error) {
+      console.error('Failed to sync activities:', error);
+      alert('Failed to sync activities.');
+    } finally {
+      setSyncingActivity(false);
     }
   };
 
@@ -1660,6 +1726,31 @@ export default function HomePage() {
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">EMAIL</p>
                   <p>{selectedLead.email || '—'}</p>
+                </div>
+                <div className="text-xs text-slate-700">
+                  <p className="text-slate-400">GETSALES</p>
+                  <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                    {selectedLead.getsales_prospect_id ? (
+                      <button
+                        onClick={syncLeadActivityHistory}
+                        disabled={syncingActivity}
+                        className="px-2 py-1 text-[11px] rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        {syncingActivity ? 'Syncing...' : 'Sync Activity'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={syncLeadToGetSales}
+                        disabled={syncingToGetSales}
+                        className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {syncingToGetSales ? 'Syncing...' : 'Sync to GetSales'}
+                      </button>
+                    )}
+                    {syncActivityMessage && (
+                      <span className="text-[11px] text-emerald-600">{syncActivityMessage}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="text-xs text-slate-700">
                   <div className="flex items-center justify-between">
