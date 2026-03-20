@@ -688,20 +688,21 @@ export async function sendEmail(params: {
     lead_uuid: params.lead_uuid,
     from_name: params.from_name,
     from_email: params.from_email,
+    to: params.to_email,
     to_name: params.to_name || params.from_name,
     to_email: params.to_email,
     cc: [],
     bcc: [],
     subject: params.subject,
+    body: params.body,
   };
   if (params.mailbox_uuid) {
     base.mailbox_uuid = params.mailbox_uuid;
   }
 
   const attemptPayloads: Record<string, unknown>[] = [
-    { ...base, body: params.body },
-    { ...base, emailBodyDomain: { body: params.body, subject: params.subject } },
-    { ...base, body: params.body, type: 'outbox' },
+    { ...base },
+    { ...base, type: 'outbox' },
   ];
 
   console.log('[getsales] send-email values:', JSON.stringify({
