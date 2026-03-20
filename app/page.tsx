@@ -1158,6 +1158,7 @@ export default function HomePage() {
   const syncLeadActivityHistory = async () => {
     if (!selectedLeadId || syncingActivity) return;
     try {
+      const hadProspectId = Boolean(selectedLead?.getsales_prospect_id);
       setSyncingActivity(true);
       setSyncActivityMessage('');
       const response = await fetch(`/api/leads/sync?lead_id=${selectedLeadId}`, {
@@ -1184,7 +1185,11 @@ export default function HomePage() {
       }
       await Promise.all([loadLeads(), syncAndLoadActivities(selectedLeadId)]);
       const syncedCount = typeof payload?.synced === 'number' ? payload.synced : 0;
-      setSyncActivityMessage(`Synced ${syncedCount} activities.`);
+      if (!hadProspectId && payload?.prospect_synced) {
+        setSyncActivityMessage(`Connected to GetSales. Synced ${syncedCount} activities.`);
+      } else {
+        setSyncActivityMessage(`Synced ${syncedCount} activities.`);
+      }
     } catch (error) {
       console.error('Failed to sync activities:', error);
       alert('Failed to sync activities.');

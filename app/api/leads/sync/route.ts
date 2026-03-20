@@ -64,7 +64,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           synced: 0,
           prospect_synced: false,
-          message: 'Could not find or create this contact in GetSales by LinkedIn URL or email',
+          message: process.env.GETSALES_UPSERT_LIST_UUID
+            ? 'Could not find or create this contact in GetSales by LinkedIn URL or email'
+            : 'Could not find contact, and GETSALES_UPSERT_LIST_UUID is missing for GetSales upsert',
         });
       }
     } else if (!lead.getsales_prospect_id) {

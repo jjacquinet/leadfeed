@@ -322,8 +322,9 @@ export async function POST(request: NextRequest) {
             getsales_uuid: data.getsales_uuid || getsalesProspectId,
           };
         } else {
-          getsalesWarning =
-            'Lead saved, but could not find or create a matching prospect in GetSales.';
+          getsalesWarning = process.env.GETSALES_UPSERT_LIST_UUID
+            ? 'Lead saved, but could not find or create a matching prospect in GetSales.'
+            : 'Lead saved, but GETSALES_UPSERT_LIST_UUID is not configured for GetSales upsert.';
         }
       } catch (error) {
         console.error('Error syncing lead to GetSales:', error);
