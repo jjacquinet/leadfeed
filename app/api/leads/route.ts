@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { normalizePhoneNumbers, primaryPhoneFromList } from '@/lib/phones';
-import { ensureProspect } from '@/lib/getsales';
+import { ensureProspect, syncLeadWorkEmail } from '@/lib/getsales';
 
 type QueueLead = {
   id: string;
@@ -143,8 +143,19 @@ export async function PATCH(request: NextRequest) {
     const now = new Date().toISOString();
     updates.updated_at = now;
 
+    const { data: existingLead, error: existingLeadError } = await supabase
+      .from('leads')
+      .select('id, first_name, last_name, company, linkedin_url, email, getsales_prospect_id')
+      .eq('id', id)
+      .single();
+
+    if (existingLeadError || !existingLead) {
+      return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+    }
+
     const hasPhoneNumbers = Object.prototype.hasOwnProperty.call(updates, 'phone_numbers');
     const hasPhone = Object.prototype.hasOwnProperty.call(updates, 'phone');
+    const hasEmail = Object.prototype.hasOwnProperty.call(updates, 'email');
 
     if (hasPhoneNumbers) {
       updates.phone_numbers = normalizePhoneNumbers(updates.phone_numbers);
@@ -154,6 +165,12 @@ export async function PATCH(request: NextRequest) {
         typeof updates.phone === 'string' ? updates.phone.trim() : '';
       updates.phone_numbers = normalizePhoneNumbers([trimmedPhone]);
       updates.phone = trimmedPhone || null;
+    }
+
+    if (hasEmail) {
+      const trimmedEmail =
+        typeof updates.email === 'string' ? updates.email.trim() : '';
+      updates.email = trimmedEmail || null;
     }
 
     if (updates.status && updates.status !== 'snoozed') {
@@ -198,6 +215,42 @@ export async function PATCH(request: NextRequest) {
     if (error) {
       console.error('Error updating lead:', error);
       return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 });
+    }
+
+    if (hasEmail && typeof data?.email === 'string' && data.email.trim()) {
+      try {
+        await syncLeadWorkEmail({
+          work_email: data.email.trim(),
+          getsales_prospect_id:
+            (typeof data.getsales_prospect_id === 'string' && data.getsales_prospect_id) ||
+            (typeof existingLead.getsales_prospect_id === 'string' && existingLead.getsales_prospect_id) ||
+            null,
+          linkedin_url:
+            (typeof data.linkedin_url === 'string' && data.linkedin_url) ||
+            (typeof existingLead.linkedin_url === 'string' && existingLead.linkedin_url) ||
+            null,
+          email:
+            (typeof data.email === 'string' && data.email) ||
+            (typeof existingLead.email === 'string' && existingLead.email) ||
+            null,
+          previous_email:
+            typeof existingLead.email === 'string' ? existingLead.email : null,
+          first_name:
+            (typeof data.first_name === 'string' && data.first_name) ||
+            (typeof existingLead.first_name === 'string' && existingLead.first_name) ||
+            null,
+          last_name:
+            (typeof data.last_name === 'string' && data.last_name) ||
+            (typeof existingLead.last_name === 'string' && existingLead.last_name) ||
+            null,
+          company:
+            (typeof data.company === 'string' && data.company) ||
+            (typeof existingLead.company === 'string' && existingLead.company) ||
+            null,
+        });
+      } catch (syncError) {
+        console.error('[getsales] Failed to sync work email on lead update:', syncError);
+      }
     }
 
     return NextResponse.json(data);

@@ -95,6 +95,17 @@ export type EnsureProspectInput = {
   company?: string | null;
 };
 
+export type SyncWorkEmailInput = {
+  work_email: string;
+  getsales_prospect_id?: string | null;
+  linkedin_url?: string | null;
+  email?: string | null;
+  previous_email?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  company?: string | null;
+};
+
 type ProspectLikeResponse = {
   uuid?: string;
   id?: string;
@@ -260,6 +271,93 @@ export async function ensureProspect(input: EnsureProspectInput): Promise<string
   );
   if (existing) return existing;
   return createProspect(input);
+}
+
+async function updateWorkEmailByContactUuid(
+  contactUuid: string,
+  workEmail: string
+): Promise<boolean> {
+  const trimmedUuid = contactUuid.trim();
+  const trimmedEmail = workEmail.trim();
+  if (!trimmedUuid || !trimmedEmail) return false;
+
+  const upsertListUuid = process.env.GETSALES_UPSERT_LIST_UUID?.trim();
+  const contactUpsertPayloads: Record<string, unknown>[] = [
+    { uuid: trimmedUuid, work_email: trimmedEmail },
+    { contact_uuid: trimmedUuid, work_email: trimmedEmail },
+    { id: trimmedUuid, work_email: trimmedEmail },
+    { contact: { uuid: trimmedUuid, work_email: trimmedEmail } },
+    { uuid: trimmedUuid, email: trimmedEmail, work_email: trimmedEmail },
+  ];
+  const leadUpsertPayloads: Record<string, unknown>[] = [
+    {
+      lead: { uuid: trimmedUuid, email: trimmedEmail, work_email: trimmedEmail },
+      update_if_exists: true,
+      move_to_list: false,
+      ...(upsertListUuid ? { list_uuid: upsertListUuid } : {}),
+    },
+    {
+      lead: { uuid: trimmedUuid, email: trimmedEmail },
+      update_if_exists: true,
+      move_to_list: false,
+      ...(upsertListUuid ? { list_uuid: upsertListUuid } : {}),
+    },
+  ];
+
+  const attempt = async (url: string, payload: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const baseCandidates = Array.from(
+    new Set([GETSALES_BASE_URL.replace(/\/+$/, ''), 'https://api.getsales.io'])
+  );
+
+  for (const base of baseCandidates) {
+    for (const payload of contactUpsertPayloads) {
+      if (await attempt(`${base}/api/openapi/contacts/upsertcontact`, payload)) {
+        return true;
+      }
+    }
+    for (const payload of leadUpsertPayloads) {
+      if (await attempt(`${base}/leads/api/leads/upsert`, payload)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export async function syncLeadWorkEmail(input: SyncWorkEmailInput): Promise<boolean> {
+  if (!process.env.GETSALES_API_KEY) return false;
+  const workEmail = input.work_email?.trim();
+  if (!workEmail) return false;
+
+  const existingProspectId = input.getsales_prospect_id?.trim();
+  let contactUuid = existingProspectId || null;
+
+  if (!contactUuid) {
+    // Prefer stable identifiers (LinkedIn + previous email) when email is being edited.
+    contactUuid = await lookupContact(
+      input.linkedin_url,
+      input.previous_email || input.email || workEmail,
+      input.first_name,
+      input.last_name,
+      input.company
+    );
+  }
+
+  if (!contactUuid) return false;
+  return updateWorkEmailByContactUuid(contactUuid, workEmail);
 }
 
 /**

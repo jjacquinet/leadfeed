@@ -327,6 +327,9 @@ export default function HomePage() {
   const [editingWebsite, setEditingWebsite] = useState(false);
   const [websiteInput, setWebsiteInput] = useState('');
   const [savingWebsite, setSavingWebsite] = useState(false);
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailInput, setEmailInput] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
   const [syncingActivity, setSyncingActivity] = useState(false);
   const [syncActivityMessage, setSyncActivityMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -505,6 +508,9 @@ export default function HomePage() {
     setEditingWebsite(false);
     setWebsiteInput('');
     setSavingWebsite(false);
+    setEditingEmail(false);
+    setEmailInput('');
+    setSavingEmail(false);
     setSyncActivityMessage('');
     setEmailComposeMode('reply');
     setSelectedEmailThreadId('');
@@ -962,6 +968,18 @@ export default function HomePage() {
     await loadLeads();
   };
 
+  const updateLeadEmail = async (leadId: string, email: string | null) => {
+    const response = await fetch('/api/leads', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: leadId, email }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update email');
+    }
+    await loadLeads();
+  };
+
   const savePhoneEdit = async (index: number) => {
     if (!selectedLead || savingPhone) return;
     const trimmedPhone = phoneInput.trim();
@@ -1040,6 +1058,23 @@ export default function HomePage() {
       alert('Failed to save website.');
     } finally {
       setSavingWebsite(false);
+    }
+  };
+
+  const saveEmail = async () => {
+    if (!selectedLead || savingEmail) return;
+    const normalized = emailInput.trim();
+    if (!normalized) return;
+    try {
+      setSavingEmail(true);
+      await updateLeadEmail(selectedLead.id, normalized);
+      setEditingEmail(false);
+      setEmailInput('');
+    } catch (error) {
+      console.error('Failed to save email:', error);
+      alert('Failed to save email.');
+    } finally {
+      setSavingEmail(false);
     }
   };
 
@@ -1708,7 +1743,68 @@ export default function HomePage() {
                 <h4 className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Contact</h4>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">EMAIL</p>
-                  <p>{selectedLead.email || '—'}</p>
+                  <div className="mt-1">
+                    {editingEmail ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="email"
+                          value={emailInput}
+                          onChange={(event) => setEmailInput(event.target.value)}
+                          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                          placeholder="name@company.com"
+                        />
+                        <button
+                          onClick={saveEmail}
+                          disabled={savingEmail || !emailInput.trim()}
+                          className="h-6 w-6 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                          title="Save"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingEmail(false);
+                            setEmailInput('');
+                          }}
+                          className="h-6 w-6 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                          title="Cancel"
+                        >
+                          x
+                        </button>
+                      </div>
+                    ) : selectedLead.email ? (
+                      <div className="flex items-center gap-1.5">
+                        <a
+                          href={`mailto:${selectedLead.email}`}
+                          className="min-w-0 flex-1 text-indigo-600 hover:underline truncate"
+                        >
+                          {selectedLead.email}
+                        </a>
+                        <button
+                          onClick={() => {
+                            setEditingEmail(true);
+                            setEmailInput(selectedLead.email || '');
+                          }}
+                          className="h-6 w-6 inline-flex items-center justify-center rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                          title="Edit email"
+                        >
+                          <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-8.95 8.95a1 1 0 01-.423.258l-3 1a1 1 0 01-1.265-1.265l1-3a1 1 0 01.258-.423l8.95-8.95zM12.172 5L5 12.172V14h1.828L14 6.828 12.172 5z" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditingEmail(true);
+                          setEmailInput('');
+                        }}
+                        className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                      >
+                        Add Email
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="text-xs text-slate-700">
                   <p className="text-slate-400">GETSALES</p>
