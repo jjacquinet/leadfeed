@@ -680,28 +680,41 @@ export async function sendEmail(params: {
     size?: number;
   }>;
 }): Promise<Record<string, unknown>> {
-  const endpoint = `${GETSALES_BASE_URL.replace(/\/+$/, '')}/emails/api/emails/send-email`;
+  const baseUrl = GETSALES_BASE_URL.replace(/\/+$/, '');
+  const endpoint = `${baseUrl}/emails/api/emails/send-email`;
 
-  const docPayload: Record<string, unknown> = {
+  const base: Record<string, unknown> = {
     sender_profile_uuid: params.sender_profile_uuid,
     lead_uuid: params.lead_uuid,
     from_name: params.from_name,
     from_email: params.from_email,
-    to_name: params.to_name,
+    to_name: params.to_name || params.from_name,
     to_email: params.to_email,
     cc: [],
     bcc: [],
     subject: params.subject,
   };
+  if (params.mailbox_uuid) {
+    base.mailbox_uuid = params.mailbox_uuid;
+  }
 
   const attemptPayloads: Record<string, unknown>[] = [
-    { ...docPayload },
-    { ...docPayload, body: params.body },
-    {
-      ...docPayload,
-      emailBodyDomain: { body: params.body, subject: params.subject },
-    },
+    { ...base, body: params.body },
+    { ...base, emailBodyDomain: { body: params.body, subject: params.subject } },
+    { ...base, body: params.body, type: 'outbox' },
   ];
+
+  console.log('[getsales] send-email values:', JSON.stringify({
+    sender_profile_uuid: params.sender_profile_uuid,
+    lead_uuid: params.lead_uuid,
+    mailbox_uuid: params.mailbox_uuid || 'NOT SET',
+    from_name: params.from_name,
+    from_email: params.from_email,
+    to_name: params.to_name,
+    to_email: params.to_email,
+    subject: params.subject,
+    body_length: params.body?.length ?? 0,
+  }));
 
   const collectedErrors: string[] = [];
   for (const payload of attemptPayloads) {
@@ -710,22 +723,21 @@ export async function sendEmail(params: {
       headers: getHeaders(),
       body: JSON.stringify(payload),
     });
-    const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const rawText = await response.text();
+    let responsePayload: Record<string, unknown> = {};
+    try { responsePayload = JSON.parse(rawText) as Record<string, unknown>; } catch { /* non-json */ }
+
     if (response.ok) {
       return responsePayload;
     }
+    const payloadKeys = Object.keys(payload).join(',');
+    console.error(`[getsales] send-email rejected (${response.status}) [keys=${payloadKeys}] FULL RESPONSE:`, rawText);
     const message =
       (typeof responsePayload.message === 'string' && responsePayload.message) ||
       (typeof responsePayload.error === 'string' && responsePayload.error) ||
       `Email send failed (${response.status})`;
-    const errorDetail =
-      responsePayload.errors && typeof responsePayload.errors === 'object'
-        ? ` | errors=${JSON.stringify(responsePayload.errors)}`
-        : '';
-    const payloadKeys = Object.keys(payload).join(',');
-    const entry = `${message}${errorDetail} [keys=${payloadKeys}]`;
+    const entry = `${message} [keys=${payloadKeys}]`;
     collectedErrors.push(entry);
-    console.error(`[getsales] send-email rejected (${response.status}):`, entry);
     if (response.status !== 422 && response.status !== 400) {
       break;
     }
