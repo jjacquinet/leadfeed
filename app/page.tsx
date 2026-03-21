@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Device, Call } from '@twilio/voice-sdk';
 import { Activity, Lead } from '@/lib/types';
 import ChannelIcon from '@/components/ui/ChannelIcon';
 import { cleanEmailReplyContent } from '@/lib/utils';
@@ -329,6 +330,14 @@ export default function HomePage() {
   const [composeText, setComposeText] = useState('');
   const [selectedSmsPhone, setSelectedSmsPhone] = useState('');
   const [callNotes, setCallNotes] = useState('');
+  const [twilioDevice, setTwilioDevice] = useState<Device | null>(null);
+  const [activeCall, setActiveCall] = useState<Call | null>(null);
+  const [callState, setCallState] = useState<'idle' | 'connecting' | 'active' | 'ended'>('idle');
+  const [callMuted, setCallMuted] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const [callPhone, setCallPhone] = useState('');
+  const [selectedCallPhone, setSelectedCallPhone] = useState('');
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showSnoozeBar, setShowSnoozeBar] = useState(false);
   const [snoozedCount, setSnoozedCount] = useState(0);
   const [closedCount, setClosedCount] = useState(0);
@@ -562,7 +571,30 @@ export default function HomePage() {
     setEmailAttachments([]);
     setShowAttachmentBrowser(false);
     setSelectedSmsPhone('');
+    setSelectedCallPhone('');
   }, [selectedLeadId]);
+
+  useEffect(() => {
+    let device: Device | null = null;
+    (async () => {
+      try {
+        const res = await fetch('/api/voice/token');
+        if (!res.ok) return;
+        const data = await res.json();
+        device = new Device(data.token, { edge: 'ashburn', closeProtection: true });
+        await device.register();
+        setTwilioDevice(device);
+      } catch (err) {
+        console.error('[twilio] Failed to init Device:', err);
+      }
+    })();
+    return () => {
+      if (device) {
+        device.destroy();
+        setTwilioDevice(null);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (composeChannel !== 'email') return;
@@ -946,6 +978,83 @@ export default function HomePage() {
     }
   };
 
+  const startCall = (phoneNumber: string) => {
+    if (!twilioDevice || callState !== 'idle') return;
+    setCallPhone(phoneNumber);
+    setCallState('connecting');
+    setCallMuted(false);
+    setCallDuration(0);
+    setCallNotes('');
+    setComposeChannel('call');
+
+    const conn = twilioDevice.connect({ params: { To: phoneNumber } });
+    conn.then((call) => {
+      setActiveCall(call);
+
+      call.on('accept', () => {
+        setCallState('active');
+        const start = Date.now();
+        callTimerRef.current = setInterval(() => {
+          setCallDuration(Math.floor((Date.now() - start) / 1000));
+        }, 1000);
+      });
+
+      call.on('disconnect', () => {
+        setCallState('ended');
+        if (callTimerRef.current) {
+          clearInterval(callTimerRef.current);
+          callTimerRef.current = null;
+        }
+      });
+
+      call.on('cancel', () => {
+        setCallState('idle');
+        setActiveCall(null);
+        if (callTimerRef.current) {
+          clearInterval(callTimerRef.current);
+          callTimerRef.current = null;
+        }
+      });
+
+      call.on('error', () => {
+        setCallState('idle');
+        setActiveCall(null);
+        if (callTimerRef.current) {
+          clearInterval(callTimerRef.current);
+          callTimerRef.current = null;
+        }
+      });
+    }).catch((err) => {
+      console.error('[twilio] connect error:', err);
+      setCallState('idle');
+    });
+  };
+
+  const endCall = () => {
+    if (activeCall) {
+      activeCall.disconnect();
+    }
+    setCallState('ended');
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+  };
+
+  const toggleMute = () => {
+    if (activeCall) {
+      const newMuted = !callMuted;
+      activeCall.mute(newMuted);
+      setCallMuted(newMuted);
+    }
+  };
+
+  const formatCallDuration = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
   const logCall = async (outcome: string) => {
     if (!selectedLeadId) return;
     await fetch('/api/activities', {
@@ -955,10 +1064,19 @@ export default function HomePage() {
         lead_id: selectedLeadId,
         type: 'call',
         content: `${outcome}${callNotes ? `\n\n${callNotes}` : ''}`,
-        metadata: { outcome },
+        metadata: {
+          outcome,
+          duration: callDuration,
+          phone: callPhone || null,
+        },
       }),
     });
     await Promise.all([syncAndLoadActivities(selectedLeadId), loadLeads()]);
+    setCallState('idle');
+    setActiveCall(null);
+    setCallDuration(0);
+    setCallPhone('');
+    setCallNotes('');
     completeTask();
   };
 
@@ -1606,23 +1724,104 @@ export default function HomePage() {
 
                 {composeChannel === 'call' ? (
                   <div className="p-3 space-y-3">
-                    <div className="flex gap-2 flex-wrap">
-                      {['Connected', 'Voicemail', 'No Answer', 'Meeting Booked'].map((outcome) => (
-                        <button
-                          key={outcome}
-                          onClick={() => logCall(outcome)}
-                          className="px-3 py-1.5 text-xs border border-slate-300 rounded-md text-slate-700 hover:bg-slate-50"
-                        >
-                          {outcome}
-                        </button>
-                      ))}
-                    </div>
-                    <textarea
-                      value={callNotes}
-                      onChange={(event) => setCallNotes(event.target.value)}
-                      placeholder="Call notes..."
-                      className="w-full min-h-20 p-2 text-sm border border-slate-200 rounded-md"
-                    />
+                    {callState === 'idle' && (
+                      <>
+                        {(() => {
+                          const phoneNumbers: string[] = Array.isArray(selectedLead?.phone_numbers)
+                            ? selectedLead.phone_numbers
+                            : selectedLead?.phone
+                              ? [selectedLead.phone]
+                              : [];
+                          if (phoneNumbers.length === 0) {
+                            return <p className="text-xs text-slate-400">This lead has no phone numbers to call.</p>;
+                          }
+                          return (
+                            <div className="space-y-2">
+                              {phoneNumbers.length > 1 ? (
+                                <select
+                                  value={selectedCallPhone || phoneNumbers[0]}
+                                  onChange={(e) => setSelectedCallPhone(e.target.value)}
+                                  className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                                >
+                                  {phoneNumbers.map((num) => (
+                                    <option key={num} value={num}>{num}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <p className="text-xs text-slate-500">
+                                  Calling: <span className="font-medium text-slate-700">{phoneNumbers[0]}</span>
+                                </p>
+                              )}
+                              <button
+                                onClick={() => startCall(selectedCallPhone || phoneNumbers[0])}
+                                disabled={!twilioDevice}
+                                className="w-full px-4 py-2 text-sm rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {!twilioDevice ? 'Initializing phone...' : 'Start Call'}
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+
+                    {(callState === 'connecting' || callState === 'active') && (
+                      <div className="space-y-3">
+                        <div className="text-center">
+                          <p className="text-sm font-medium text-slate-800">
+                            {selectedLead ? `${selectedLead.first_name} ${selectedLead.last_name}`.trim() : 'Unknown'}
+                          </p>
+                          <p className="text-xs text-slate-500">{callPhone}</p>
+                          <p className={`text-lg font-mono mt-1 ${callState === 'connecting' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {callState === 'connecting' ? 'Connecting...' : formatCallDuration(callDuration)}
+                          </p>
+                        </div>
+                        <div className="flex justify-center gap-3">
+                          <button
+                            onClick={toggleMute}
+                            className={`px-4 py-2 text-xs rounded-md border ${
+                              callMuted
+                                ? 'bg-amber-100 border-amber-300 text-amber-800'
+                                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            {callMuted ? 'Unmute' : 'Mute'}
+                          </button>
+                          <button
+                            onClick={endCall}
+                            className="px-4 py-2 text-xs rounded-md bg-red-600 text-white hover:bg-red-700"
+                          >
+                            End Call
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {callState === 'ended' && (
+                      <div className="space-y-3">
+                        <div className="text-center">
+                          <p className="text-sm text-slate-600">Call ended</p>
+                          <p className="text-xs text-slate-400">{callPhone} · {formatCallDuration(callDuration)}</p>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          {['Connected', 'Voicemail', 'No Answer', 'Meeting Booked'].map((outcome) => (
+                            <button
+                              key={outcome}
+                              onClick={() => logCall(outcome)}
+                              className="px-3 py-1.5 text-xs border border-slate-300 rounded-md text-slate-700 hover:bg-slate-50"
+                            >
+                              {outcome}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          value={callNotes}
+                          onChange={(event) => setCallNotes(event.target.value)}
+                          placeholder="Call notes..."
+                          className="w-full min-h-20 p-2 text-sm border border-slate-200 rounded-md"
+                        />
+                      </div>
+                    )}
                   </div>
                 ) : composeChannel === 'email' ? (
                   <div className="p-3 space-y-2">
@@ -2046,13 +2245,14 @@ export default function HomePage() {
                             <>
                               <span className="min-w-0 flex-1 truncate">{phone}</span>
                               {telHref && (
-                                <a
-                                  href={telHref}
-                                  className="h-6 px-1.5 inline-flex items-center rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                  title="Call (right-click to use native options)"
+                                <button
+                                  onClick={() => startCall(phone)}
+                                  disabled={!twilioDevice || callState !== 'idle'}
+                                  className="h-6 px-1.5 inline-flex items-center rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Call via Twilio"
                                 >
                                   Call
-                                </a>
+                                </button>
                               )}
                               <button
                                 onClick={() => {
