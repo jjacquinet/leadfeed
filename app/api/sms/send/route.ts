@@ -40,12 +40,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
+    console.log('[sms/send] Attempting to send:', JSON.stringify({
+      from: fromNumber,
+      to: phone_number.trim(),
+      body_length: message.trim().length,
+      account_sid_prefix: accountSid.slice(0, 6) + '...',
+    }));
+
     const client = twilio(accountSid, authToken);
     const twilioMessage = await client.messages.create({
       body: message.trim(),
       from: fromNumber,
       to: phone_number.trim(),
     });
+
+    console.log('[sms/send] Twilio response:', JSON.stringify({
+      sid: twilioMessage.sid,
+      status: twilioMessage.status,
+      errorCode: twilioMessage.errorCode,
+      errorMessage: twilioMessage.errorMessage,
+      direction: twilioMessage.direction,
+      from: twilioMessage.from,
+      to: twilioMessage.to,
+    }));
+
+    if (twilioMessage.errorCode) {
+      console.error(`[sms/send] Twilio error ${twilioMessage.errorCode}: ${twilioMessage.errorMessage}`);
+      return NextResponse.json({
+        error: `Twilio error: ${twilioMessage.errorMessage || twilioMessage.errorCode}`,
+      }, { status: 400 });
+    }
 
     const now = new Date().toISOString();
     const { data: activity, error: insertError } = await supabase
