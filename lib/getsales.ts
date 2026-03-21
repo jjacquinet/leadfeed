@@ -645,6 +645,92 @@ export async function fetchLinkedInAccount(accountUuid: string): Promise<GetSale
   return null;
 }
 
+function getAuthHeaders(): HeadersInit {
+  const apiKey = process.env.GETSALES_API_KEY;
+  if (!apiKey) throw new Error('GETSALES_API_KEY not configured');
+  const headers: HeadersInit = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (process.env.GETSALES_TEAM_ID) {
+    headers['Team-ID'] = process.env.GETSALES_TEAM_ID;
+  }
+  return headers;
+}
+
+export interface GetSalesAttachment {
+  uuid: string;
+  team_id?: number;
+  payload?: Record<string, any>;
+  user_id?: number;
+  name?: string;
+  original_name?: string;
+  file_name?: string;
+  created_at?: string;
+}
+
+export async function listAttachments(): Promise<GetSalesAttachment[]> {
+  try {
+    const url = new URL('/flows/api/attachments', GETSALES_BASE_URL);
+    url.searchParams.set('limit', '200');
+    url.searchParams.set('offset', '0');
+    url.searchParams.set('order_field', 'created_at');
+    url.searchParams.set('order_type', 'desc');
+    const response = await fetch(url.toString(), { headers: getHeaders() });
+    if (!response.ok) {
+      console.error('[getsales] List attachments failed:', response.status, await response.text());
+      return [];
+    }
+    const data = await response.json();
+    return (data.data || data || []) as GetSalesAttachment[];
+  } catch (error) {
+    console.error('[getsales] Error listing attachments:', error);
+    return [];
+  }
+}
+
+export async function uploadAttachment(
+  fileBuffer: Buffer,
+  filename: string,
+  contentType?: string
+): Promise<GetSalesAttachment | null> {
+  try {
+    const url = new URL('/flows/api/attachments', GETSALES_BASE_URL);
+    const formData = new FormData();
+    const uint8 = new Uint8Array(fileBuffer);
+    const blob = new Blob([uint8 as unknown as BlobPart], { type: contentType || 'application/octet-stream' });
+    formData.append('attachment', blob, filename);
+
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData,
+    });
+    if (!response.ok) {
+      console.error('[getsales] Upload attachment failed:', response.status, await response.text());
+      return null;
+    }
+    const data = await response.json();
+    return (data.data || data) as GetSalesAttachment;
+  } catch (error) {
+    console.error('[getsales] Error uploading attachment:', error);
+    return null;
+  }
+}
+
+export async function deleteAttachment(uuid: string): Promise<boolean> {
+  try {
+    const url = new URL(`/flows/api/attachments/${uuid}`, GETSALES_BASE_URL);
+    const response = await fetch(url.toString(), {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    return response.ok || response.status === 204;
+  } catch (error) {
+    console.error('[getsales] Error deleting attachment:', error);
+    return false;
+  }
+}
+
 export async function sendLinkedInMessage(params: {
   sender_profile_uuid: string;
   lead_uuid: string;
@@ -673,17 +759,12 @@ export async function sendEmail(params: {
   subject: string;
   body: string;
   replied_to_uuid?: string;
-  attachments?: Array<{
-    filename: string;
-    content_type?: string;
-    content_base64: string;
-    size?: number;
-  }>;
+  attachments?: Array<{ uuid: string; name: string }>;
 }): Promise<Record<string, unknown>> {
   const baseUrl = GETSALES_BASE_URL.replace(/\/+$/, '');
   const endpoint = `${baseUrl}/emails/api/emails/send-email`;
 
-  const base: Record<string, unknown> = {
+  const payload: Record<string, unknown> = {
     sender_profile_uuid: params.sender_profile_uuid,
     lead_uuid: params.lead_uuid,
     from_name: params.from_name,
@@ -697,17 +778,10 @@ export async function sendEmail(params: {
     body: params.body,
   };
   if (params.mailbox_uuid) {
-    base.mailbox_uuid = params.mailbox_uuid;
+    payload.mailbox_uuid = params.mailbox_uuid;
   }
-
-  const payload: Record<string, unknown> = { ...base };
-
   if (Array.isArray(params.attachments) && params.attachments.length > 0) {
-    payload.attachments = params.attachments.map(a => ({
-      filename: a.filename,
-      content: a.content_base64,
-      content_type: a.content_type || 'application/octet-stream',
-    }));
+    payload.attachments = params.attachments.map(a => ({ uuid: a.uuid, name: a.name }));
   }
 
   console.log('[getsales] send-email values:', JSON.stringify({
@@ -721,7 +795,7 @@ export async function sendEmail(params: {
     subject: params.subject,
     body_length: params.body?.length ?? 0,
     attachments_count: params.attachments?.length ?? 0,
-    attachment_names: params.attachments?.map(a => a.filename) ?? [],
+    attachment_names: params.attachments?.map(a => a.name) ?? [],
   }));
 
   const response = await fetch(endpoint, {

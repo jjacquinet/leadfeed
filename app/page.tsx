@@ -23,11 +23,8 @@ type SenderProfileOption = {
 };
 
 type ComposeAttachment = {
-  id: string;
-  filename: string;
-  contentType: string;
-  size: number;
-  contentBase64: string;
+  uuid: string;
+  name: string;
 };
 
 type EmailThreadOption = {
@@ -355,6 +352,10 @@ export default function HomePage() {
   const [selectedSenderProfileUuid, setSelectedSenderProfileUuid] = useState<string>('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailAttachments, setEmailAttachments] = useState<ComposeAttachment[]>([]);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [showAttachmentBrowser, setShowAttachmentBrowser] = useState(false);
+  const [storedAttachments, setStoredAttachments] = useState<ComposeAttachment[]>([]);
+  const [loadingStoredAttachments, setLoadingStoredAttachments] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [loadingSenderProfiles, setLoadingSenderProfiles] = useState(false);
   const [linkedInSenderProfiles, setLinkedInSenderProfiles] = useState<SenderProfileOption[]>([]);
@@ -560,6 +561,7 @@ export default function HomePage() {
     setSelectedLinkedInSenderProfileUuid('');
     setEmailSubject('');
     setEmailAttachments([]);
+    setShowAttachmentBrowser(false);
   }, [selectedLeadId]);
 
   useEffect(() => {
@@ -770,31 +772,55 @@ export default function HomePage() {
 
   const addAttachments = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const readFile = (file: File) =>
-      new Promise<ComposeAttachment>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-          const contentBase64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : '';
-          resolve({
-            id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
-            filename: file.name,
-            contentType: file.type || 'application/octet-stream',
-            size: file.size,
-            contentBase64,
-          });
-        };
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
+    setUploadingAttachment(true);
+    try {
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/getsales/attachments', { method: 'POST', body: formData });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(`Failed to upload ${file.name}: ${err.error || 'Unknown error'}`);
+          continue;
+        }
+        const data = await res.json();
+        const newAtt: ComposeAttachment = { uuid: data.uuid, name: data.name || file.name };
+        setEmailAttachments((prev) => {
+          if (prev.some((a) => a.uuid === newAtt.uuid)) return prev;
+          return [...prev, newAtt];
+        });
+      }
+    } finally {
+      setUploadingAttachment(false);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+    }
+  };
 
-    const next = await Promise.all(Array.from(files).map(readFile));
+  const fetchStoredAttachments = async () => {
+    setLoadingStoredAttachments(true);
+    try {
+      const res = await fetch('/api/getsales/attachments');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = (data.attachments || []).map((a: Record<string, unknown>) => ({
+        uuid: a.uuid as string,
+        name: (a.original_name || a.file_name || a.name || a.uuid) as string,
+      }));
+      setStoredAttachments(list);
+    } catch {
+      console.error('Failed to fetch stored attachments');
+    } finally {
+      setLoadingStoredAttachments(false);
+    }
+  };
+
+  const toggleStoredAttachment = (att: ComposeAttachment) => {
     setEmailAttachments((prev) => {
-      const newNames = new Set(next.map(a => a.filename));
-      const deduped = prev.filter(a => !newNames.has(a.filename));
-      return [...deduped, ...next];
+      if (prev.some((a) => a.uuid === att.uuid)) {
+        return prev.filter((a) => a.uuid !== att.uuid);
+      }
+      return [...prev, att];
     });
-    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
   const sendCompose = async () => {
@@ -871,13 +897,8 @@ export default function HomePage() {
           from_name: composeChannel === 'email' ? selectedSender?.from_name : undefined,
           from_email: composeChannel === 'email' ? selectedSender?.from_email : undefined,
           attachments:
-            composeChannel === 'email'
-              ? emailAttachments.map((attachment) => ({
-                  filename: attachment.filename,
-                  content_type: attachment.contentType,
-                  content_base64: attachment.contentBase64,
-                  size: attachment.size,
-                }))
+            composeChannel === 'email' && emailAttachments.length > 0
+              ? emailAttachments.map((a) => ({ uuid: a.uuid, name: a.name }))
               : undefined,
         }),
       });
@@ -890,7 +911,6 @@ export default function HomePage() {
               ? errorPayload.error
               : 'Failed to send message';
         setEmailAttachments([]);
-        if (attachmentInputRef.current) attachmentInputRef.current.value = '';
         alert(message);
         return;
       }
@@ -910,7 +930,6 @@ export default function HomePage() {
     await Promise.all([syncAndLoadActivities(selectedLeadId), loadLeads()]);
     if (composeChannel === 'email') {
       setEmailAttachments([]);
-      if (attachmentInputRef.current) attachmentInputRef.current.value = '';
       if (emailComposeMode === 'new') {
         setEmailSubject('');
       }
@@ -1696,41 +1715,85 @@ export default function HomePage() {
                       className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
                     />
 
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <input
-                        ref={attachmentInputRef}
-                        type="file"
-                        multiple
-                        className="hidden"
-                        onChange={(event) => {
-                          void addAttachments(event.target.files);
-                        }}
-                      />
-                      <button
-                        onClick={() => attachmentInputRef.current?.click()}
-                        className="px-2 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
-                      >
-                        Attach file
-                      </button>
-                      {emailAttachments.map((attachment) => (
-                        <span
-                          key={attachment.id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-[11px] text-slate-700"
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          ref={attachmentInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={(event) => {
+                            void addAttachments(event.target.files);
+                          }}
+                        />
+                        <button
+                          onClick={() => attachmentInputRef.current?.click()}
+                          disabled={uploadingAttachment}
+                          className="px-2 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                         >
-                          {attachment.filename}
-                          <button
-                            onClick={() => {
-                              setEmailAttachments((prev) =>
-                                prev.filter((item) => item.id !== attachment.id)
-                              );
-                            }}
-                            className="text-slate-500 hover:text-slate-700"
-                            title="Remove attachment"
+                          {uploadingAttachment ? 'Uploading...' : 'Upload & attach'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowAttachmentBrowser((prev) => !prev);
+                            if (!showAttachmentBrowser) void fetchStoredAttachments();
+                          }}
+                          className="px-2 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50"
+                        >
+                          Browse stored
+                        </button>
+                        {emailAttachments.map((attachment) => (
+                          <span
+                            key={attachment.uuid}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-[11px] text-blue-800"
                           >
-                            x
-                          </button>
-                        </span>
-                      ))}
+                            {attachment.name}
+                            <button
+                              onClick={() => {
+                                setEmailAttachments((prev) =>
+                                  prev.filter((item) => item.uuid !== attachment.uuid)
+                                );
+                              }}
+                              className="text-blue-500 hover:text-blue-700"
+                              title="Remove attachment"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+
+                      {showAttachmentBrowser && (
+                        <div className="border border-slate-200 rounded-md p-2 max-h-40 overflow-y-auto bg-white">
+                          {loadingStoredAttachments ? (
+                            <p className="text-xs text-slate-400">Loading attachments...</p>
+                          ) : storedAttachments.length === 0 ? (
+                            <p className="text-xs text-slate-400">No stored attachments found.</p>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              {storedAttachments.map((att) => {
+                                const isSelected = emailAttachments.some((a) => a.uuid === att.uuid);
+                                return (
+                                  <label
+                                    key={att.uuid}
+                                    className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-xs ${
+                                      isSelected ? 'bg-blue-50 text-blue-800' : 'hover:bg-slate-50 text-slate-700'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => toggleStoredAttachment(att)}
+                                      className="accent-blue-600"
+                                    />
+                                    {att.name}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="mt-2 flex justify-end">

@@ -37,12 +37,7 @@ export async function POST(request: NextRequest) {
       email_mode?: 'reply' | 'new';
       thread_id?: string;
       reply_to_email_uuid?: string;
-      attachments?: Array<{
-        filename: string;
-        content_type?: string;
-        content_base64: string;
-        size?: number;
-      }>;
+      attachments?: Array<{ uuid: string; name: string }>;
     };
 
     if (!lead_id || !sender_profile_uuid || !channel || !content?.trim()) {
@@ -158,8 +153,8 @@ export async function POST(request: NextRequest) {
         ? attachments.filter(
             (item) =>
               item &&
-              typeof item.filename === 'string' &&
-              typeof item.content_base64 === 'string'
+              typeof item.uuid === 'string' &&
+              typeof item.name === 'string'
           )
         : [];
       const result = await sendEmail({
@@ -218,10 +213,9 @@ export async function POST(request: NextRequest) {
           email_uuid: externalId?.startsWith('gs_em_') ? externalId.replace(/^gs_em_/, '') : null,
           attachments:
             Array.isArray(attachments) && attachments.length > 0
-              ? attachments.map((item) => ({
-                  filename: item.filename,
-                  content_type: item.content_type || null,
-                  size: item.size || null,
+              ? attachments.filter((a) => a?.uuid && a?.name).map((a) => ({
+                  uuid: a.uuid,
+                  name: a.name,
                 }))
               : null,
         },
