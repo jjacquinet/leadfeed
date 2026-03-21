@@ -327,6 +327,7 @@ export default function HomePage() {
   const [tab, setTab] = useState<FeedTab>('today');
   const [composeChannel, setComposeChannel] = useState<ComposeChannel>('email');
   const [composeText, setComposeText] = useState('');
+  const [selectedSmsPhone, setSelectedSmsPhone] = useState('');
   const [callNotes, setCallNotes] = useState('');
   const [showSnoozeBar, setShowSnoozeBar] = useState(false);
   const [snoozedCount, setSnoozedCount] = useState(0);
@@ -560,6 +561,7 @@ export default function HomePage() {
     setEmailSubject('');
     setEmailAttachments([]);
     setShowAttachmentBrowser(false);
+    setSelectedSmsPhone('');
   }, [selectedLeadId]);
 
   useEffect(() => {
@@ -894,14 +896,38 @@ export default function HomePage() {
         alert(message);
         return;
       }
+    } else if (composeChannel === 'text') {
+      const phoneNumbers: string[] = Array.isArray(selectedLead.phone_numbers)
+        ? selectedLead.phone_numbers
+        : selectedLead.phone
+          ? [selectedLead.phone]
+          : [];
+      const targetPhone = selectedSmsPhone || phoneNumbers[0] || '';
+      if (!targetPhone) {
+        alert('This lead has no phone number to text.');
+        return;
+      }
+      const smsRes = await fetch('/api/sms/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead_id: selectedLeadId,
+          phone_number: targetPhone,
+          message: composeText.trim(),
+        }),
+      });
+      if (!smsRes.ok) {
+        const err = await smsRes.json().catch(() => ({}));
+        alert(err.error || 'Failed to send SMS');
+        return;
+      }
     } else {
-      const type = composeChannel === 'text' ? 'text_sent' : 'note';
       await fetch('/api/activities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           lead_id: selectedLeadId,
-          type,
+          type: 'note',
           content: composeText.trim(),
         }),
       });
@@ -1806,12 +1832,40 @@ export default function HomePage() {
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="p-3">
+                ) : composeChannel === 'text' ? (
+                  <div className="p-3 space-y-2">
+                    {(() => {
+                      const phoneNumbers: string[] = Array.isArray(selectedLead?.phone_numbers)
+                        ? selectedLead.phone_numbers
+                        : selectedLead?.phone
+                          ? [selectedLead.phone]
+                          : [];
+                      if (phoneNumbers.length === 0) {
+                        return <p className="text-xs text-slate-400">This lead has no phone numbers.</p>;
+                      }
+                      if (phoneNumbers.length === 1) {
+                        return (
+                          <p className="text-xs text-slate-500">
+                            To: <span className="font-medium text-slate-700">{phoneNumbers[0]}</span>
+                          </p>
+                        );
+                      }
+                      return (
+                        <select
+                          value={selectedSmsPhone || phoneNumbers[0]}
+                          onChange={(e) => setSelectedSmsPhone(e.target.value)}
+                          className="w-full p-2 text-sm border border-slate-200 rounded-md"
+                        >
+                          {phoneNumbers.map((num) => (
+                            <option key={num} value={num}>{num}</option>
+                          ))}
+                        </select>
+                      );
+                    })()}
                     <textarea
                       value={composeText}
                       onChange={(event) => setComposeText(event.target.value)}
-                      placeholder={composeChannel === 'note' ? 'Add note...' : `Write ${composeChannel} message...`}
+                      placeholder="Write text message..."
                       className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
                     />
                     <div className="mt-2 flex justify-end">
@@ -1820,9 +1874,25 @@ export default function HomePage() {
                         disabled={isSending}
                         className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {isSending
-                          ? 'Sending...'
-                          : composeChannel === 'note' ? 'Save Note' : composeChannel === 'text' ? 'Log Text' : 'Send'}
+                        {isSending ? 'Sending...' : 'Send Text'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3">
+                    <textarea
+                      value={composeText}
+                      onChange={(event) => setComposeText(event.target.value)}
+                      placeholder="Add note..."
+                      className="w-full min-h-24 p-2 text-sm border border-slate-200 rounded-md"
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        onClick={sendCompose}
+                        disabled={isSending}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isSending ? 'Saving...' : 'Save Note'}
                       </button>
                     </div>
                   </div>
