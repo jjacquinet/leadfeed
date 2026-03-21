@@ -352,7 +352,6 @@ export default function HomePage() {
   const [selectedSenderProfileUuid, setSelectedSenderProfileUuid] = useState<string>('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailAttachments, setEmailAttachments] = useState<ComposeAttachment[]>([]);
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [showAttachmentBrowser, setShowAttachmentBrowser] = useState(false);
   const [storedAttachments, setStoredAttachments] = useState<ComposeAttachment[]>([]);
   const [loadingStoredAttachments, setLoadingStoredAttachments] = useState(false);
@@ -381,7 +380,6 @@ export default function HomePage() {
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const allLeads = useMemo(() => {
     const map = new Map<string, Lead>();
@@ -768,32 +766,6 @@ export default function HomePage() {
     setShowSnoozeBar(true);
     setComposeText('');
     setCallNotes('');
-  };
-
-  const addAttachments = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setUploadingAttachment(true);
-    try {
-      for (const file of Array.from(files)) {
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch('/api/getsales/attachments', { method: 'POST', body: formData });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          alert(`Failed to upload ${file.name}: ${err.error || 'Unknown error'}`);
-          continue;
-        }
-        const data = await res.json();
-        const newAtt: ComposeAttachment = { uuid: data.uuid, name: data.name || file.name };
-        setEmailAttachments((prev) => {
-          if (prev.some((a) => a.uuid === newAtt.uuid)) return prev;
-          return [...prev, newAtt];
-        });
-      }
-    } finally {
-      setUploadingAttachment(false);
-      if (attachmentInputRef.current) attachmentInputRef.current.value = '';
-    }
   };
 
   const fetchStoredAttachments = async () => {
@@ -1725,22 +1697,6 @@ export default function HomePage() {
 
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <input
-                          ref={attachmentInputRef}
-                          type="file"
-                          multiple
-                          className="hidden"
-                          onChange={(event) => {
-                            void addAttachments(event.target.files);
-                          }}
-                        />
-                        <button
-                          onClick={() => attachmentInputRef.current?.click()}
-                          disabled={uploadingAttachment}
-                          className="px-2 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                        >
-                          {uploadingAttachment ? 'Uploading...' : 'Upload & attach'}
-                        </button>
                         <button
                           onClick={() => {
                             setShowAttachmentBrowser((prev) => !prev);
