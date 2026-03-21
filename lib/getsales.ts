@@ -724,6 +724,7 @@ export async function sendEmail(params: {
     subject: params.subject,
     body_length: params.body?.length ?? 0,
     attachments_count: params.attachments?.length ?? 0,
+    attachment_names: params.attachments?.map(a => a.filename) ?? [],
   }));
 
   const collectedErrors: string[] = [];
