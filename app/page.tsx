@@ -802,10 +802,18 @@ export default function HomePage() {
       const res = await fetch('/api/getsales/attachments');
       if (!res.ok) return;
       const data = await res.json();
-      const list = (data.attachments || []).map((a: Record<string, unknown>) => ({
-        uuid: a.uuid as string,
-        name: (a.original_name || a.file_name || a.name || a.uuid) as string,
-      }));
+      const list = (data.attachments || []).map((a: Record<string, unknown>) => {
+        const payload = (a.payload || {}) as Record<string, unknown>;
+        const name =
+          (a.original_name as string) ||
+          (a.file_name as string) ||
+          (a.name as string) ||
+          (payload.original_name as string) ||
+          (payload.name as string) ||
+          (payload.file_name as string) ||
+          (a.uuid as string);
+        return { uuid: a.uuid as string, name };
+      });
       setStoredAttachments(list);
     } catch {
       console.error('Failed to fetch stored attachments');

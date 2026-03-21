@@ -4,6 +4,9 @@ import { listAttachments, uploadAttachment, deleteAttachment } from '@/lib/getsa
 export async function GET() {
   try {
     const attachments = await listAttachments();
+    if (attachments.length > 0) {
+      console.log('[attachments] sample item keys:', JSON.stringify(attachments[0], null, 2));
+    }
     return NextResponse.json({ attachments });
   } catch (error) {
     console.error('[attachments] GET error:', error);
