@@ -355,6 +355,7 @@ export default function HomePage() {
   const [selectedSenderProfileUuid, setSelectedSenderProfileUuid] = useState<string>('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailAttachments, setEmailAttachments] = useState<ComposeAttachment[]>([]);
+  const [isSending, setIsSending] = useState(false);
   const [loadingSenderProfiles, setLoadingSenderProfiles] = useState(false);
   const [linkedInSenderProfiles, setLinkedInSenderProfiles] = useState<SenderProfileOption[]>([]);
   const [selectedLinkedInSenderProfileUuid, setSelectedLinkedInSenderProfileUuid] = useState<string>('');
@@ -788,16 +789,23 @@ export default function HomePage() {
       });
 
     const next = await Promise.all(Array.from(files).map(readFile));
-    setEmailAttachments((prev) => [...prev, ...next]);
+    setEmailAttachments((prev) => {
+      const newNames = new Set(next.map(a => a.filename));
+      const deduped = prev.filter(a => !newNames.has(a.filename));
+      return [...deduped, ...next];
+    });
     if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
   const sendCompose = async () => {
     if (!selectedLead || !selectedLeadId) return;
+    if (isSending) return;
 
     if (composeChannel === 'call') return;
     if (!composeText.trim()) return;
 
+    setIsSending(true);
+    try {
     if (composeChannel === 'email' || composeChannel === 'linkedin') {
       const senderProfilesEndpoint =
         composeChannel === 'linkedin'
@@ -881,6 +889,8 @@ export default function HomePage() {
             : typeof errorPayload?.error === 'string'
               ? errorPayload.error
               : 'Failed to send message';
+        setEmailAttachments([]);
+        if (attachmentInputRef.current) attachmentInputRef.current.value = '';
         alert(message);
         return;
       }
@@ -906,6 +916,9 @@ export default function HomePage() {
       }
     }
     completeTask();
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const logCall = async (outcome: string) => {
@@ -1723,9 +1736,10 @@ export default function HomePage() {
                     <div className="mt-2 flex justify-end">
                       <button
                         onClick={sendCompose}
-                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                        disabled={isSending}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Send
+                        {isSending ? 'Sending...' : 'Send'}
                       </button>
                     </div>
                   </div>
@@ -1758,9 +1772,10 @@ export default function HomePage() {
                     <div className="mt-2 flex justify-end">
                       <button
                         onClick={sendCompose}
-                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                        disabled={isSending}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Send
+                        {isSending ? 'Sending...' : 'Send'}
                       </button>
                     </div>
                   </div>
@@ -1775,9 +1790,12 @@ export default function HomePage() {
                     <div className="mt-2 flex justify-end">
                       <button
                         onClick={sendCompose}
-                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700"
+                        disabled={isSending}
+                        className="px-4 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {composeChannel === 'note' ? 'Save Note' : composeChannel === 'text' ? 'Log Text' : 'Send'}
+                        {isSending
+                          ? 'Sending...'
+                          : composeChannel === 'note' ? 'Save Note' : composeChannel === 'text' ? 'Log Text' : 'Send'}
                       </button>
                     </div>
                   </div>

@@ -700,18 +700,15 @@ export async function sendEmail(params: {
     base.mailbox_uuid = params.mailbox_uuid;
   }
 
-  const safeAttachments = Array.isArray(params.attachments) && params.attachments.length > 0
-    ? params.attachments.map(a => ({
-        filename: a.filename,
-        content: a.content_base64,
-        content_type: a.content_type || 'application/octet-stream',
-      }))
-    : undefined;
+  const payload: Record<string, unknown> = { ...base };
 
-  const attemptPayloads: Record<string, unknown>[] = [
-    { ...base, ...(safeAttachments ? { attachments: safeAttachments } : {}) },
-    { ...base, ...(safeAttachments ? { emailBodyDomain: { body: params.body, subject: params.subject, attachments: safeAttachments } } : {}), type: 'outbox' },
-  ];
+  if (Array.isArray(params.attachments) && params.attachments.length > 0) {
+    payload.attachments = params.attachments.map(a => ({
+      filename: a.filename,
+      content: a.content_base64,
+      content_type: a.content_type || 'application/octet-stream',
+    }));
+  }
 
   console.log('[getsales] send-email values:', JSON.stringify({
     sender_profile_uuid: params.sender_profile_uuid,
@@ -727,32 +724,24 @@ export async function sendEmail(params: {
     attachment_names: params.attachments?.map(a => a.filename) ?? [],
   }));
 
-  const collectedErrors: string[] = [];
-  for (const payload of attemptPayloads) {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(payload),
-    });
-    const rawText = await response.text();
-    let responsePayload: Record<string, unknown> = {};
-    try { responsePayload = JSON.parse(rawText) as Record<string, unknown>; } catch { /* non-json */ }
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(payload),
+  });
+  const rawText = await response.text();
+  let responsePayload: Record<string, unknown> = {};
+  try { responsePayload = JSON.parse(rawText) as Record<string, unknown>; } catch { /* non-json */ }
 
-    if (response.ok) {
-      return responsePayload;
-    }
-    const payloadKeys = Object.keys(payload).join(',');
-    console.error(`[getsales] send-email rejected (${response.status}) [keys=${payloadKeys}] FULL RESPONSE:`, rawText);
-    const message =
-      (typeof responsePayload.message === 'string' && responsePayload.message) ||
-      (typeof responsePayload.error === 'string' && responsePayload.error) ||
-      `Email send failed (${response.status})`;
-    const entry = `${message} [keys=${payloadKeys}]`;
-    collectedErrors.push(entry);
-    if (response.status !== 422 && response.status !== 400) {
-      break;
-    }
+  if (response.ok) {
+    return responsePayload;
   }
 
-  throw new Error(collectedErrors.join(' || ') || 'Unknown GetSales send-email error');
+  const payloadKeys = Object.keys(payload).join(',');
+  console.error(`[getsales] send-email rejected (${response.status}) [keys=${payloadKeys}] FULL RESPONSE:`, rawText);
+  const message =
+    (typeof responsePayload.message === 'string' && responsePayload.message) ||
+    (typeof responsePayload.error === 'string' && responsePayload.error) ||
+    `Email send failed (${response.status})`;
+  throw new Error(`${message} [keys=${payloadKeys}]`);
 }
